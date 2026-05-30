@@ -1,0 +1,16 @@
+.git
+.ai
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+env/
+node_modules/
+build/
+dist/
+.dart_tool/
+android/JarvisApp/.gradle/
+android/JarvisApp/build/
+*.log
+.env

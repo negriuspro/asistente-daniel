@@ -1,0 +1,11 @@
+{
+  "name": "Jarvis Assistant",
+  "short_name": "Jarvis",
+  "description": "Asistente de voz personal",
+  "start_url": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#000510",
+  "theme_color": "#00d4ff",
+  "icons": []
+}

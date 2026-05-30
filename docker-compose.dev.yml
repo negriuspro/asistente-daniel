@@ -1,0 +1,16 @@
+services:
+  nginx:
+    ports:
+      - "${APP_HOST:-0.0.0.0}:${APP_PORT:-3000}:80"
+
+  frontend:
+    volumes:
+      - ./client:/usr/share/nginx/html:ro
+
+  backend:
+    command: ["uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--proxy-headers"]
+    environment:
+      APP_ENV: development
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "${BACKEND_HOST:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"

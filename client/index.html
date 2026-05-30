@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#000510">
+  <title>JARVIS</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+  <canvas id="particles"></canvas>
+  <div id="hex-bg"></div>
+
+  <div class="corner tl"><span class="c-h"></span><span class="c-v"></span></div>
+  <div class="corner tr"><span class="c-h"></span><span class="c-v"></span></div>
+  <div class="corner bl"><span class="c-h"></span><span class="c-v"></span></div>
+  <div class="corner br"><span class="c-h"></span><span class="c-v"></span></div>
+
+  <!-- Header -->
+  <header class="hud-header">
+    <span class="hud-brand">J.A.R.V.I.S</span>
+    <span id="status" class="status">Iniciando sistema...</span>
+    <div class="hud-right">
+      <div id="conn-dot" class="conn-dot off"></div>
+      <button class="menu-btn" onclick="togglePanel()" title="Panel de control">⬡</button>
+    </div>
+  </header>
+
+  <!-- Panel overlay -->
+  <div id="panel-overlay" class="panel-overlay" onclick="closePanel()"></div>
+
+  <!-- Control Panel -->
+  <aside id="ctrl-panel" class="ctrl-panel">
+    <div class="cp-head">
+      <span class="cp-title">◈ CONTROL</span>
+      <button class="cp-close" onclick="closePanel()">✕</button>
+    </div>
+
+    <nav class="cp-tabs">
+      <button class="cptab active" data-tab="home"    onclick="switchTab('home')">🏠<br><small>HOGAR</small></button>
+      <button class="cptab"        data-tab="battery" onclick="switchTab('battery')">🔋<br><small>BATERÍA</small></button>
+      <button class="cptab"        data-tab="system"  onclick="switchTab('system')">💻<br><small>SISTEMA</small></button>
+      <button class="cptab"        data-tab="quick"   onclick="switchTab('quick')">⚡<br><small>RÁPIDOS</small></button>
+      <button class="cptab"        data-tab="hist"    onclick="switchTab('hist')">📋<br><small>LOG</small></button>
+    </nav>
+
+    <div class="cp-body">
+
+      <!-- Smart Home -->
+      <div id="cptab-home" class="cptab-pane active">
+        <p class="cp-section-label">DISPOSITIVOS TUYA</p>
+        <div id="devices-list" class="devices-list">
+          <p class="cp-loading">◌ Cargando...</p>
+        </div>
+      </div>
+
+      <!-- Battery -->
+      <div id="cptab-battery" class="cptab-pane">
+        <p class="cp-section-label">ESTADO DE BATERÍA</p>
+        <div class="bat-wrap">
+          <svg class="bat-svg" viewBox="0 0 140 140">
+            <circle cx="70" cy="70" r="55" class="bat-track"/>
+            <circle cx="70" cy="70" r="55" class="bat-arc" id="bat-arc"/>
+          </svg>
+          <div class="bat-center">
+            <span id="bat-pct" class="bat-pct">--%</span>
+            <span id="bat-st"  class="bat-st">--</span>
+          </div>
+        </div>
+        <div class="bat-rows">
+          <div class="bat-row"><span>Auto-protección</span><span id="bat-auto" class="badge-c">--</span></div>
+          <div class="bat-row"><span>Enchufe PC</span>     <span id="bat-plug" class="badge-c">--</span></div>
+          <div class="bat-row"><span>Umbral mínimo</span>  <span id="bat-lo"   class="badge-d">20%</span></div>
+          <div class="bat-row"><span>Umbral máximo</span>  <span id="bat-hi"   class="badge-d">80%</span></div>
+        </div>
+      </div>
+
+      <!-- System -->
+      <div id="cptab-system" class="cptab-pane">
+        <p class="cp-section-label">RECURSOS DEL SISTEMA</p>
+        <div class="sys-bars">
+          <div class="sys-item">
+            <div class="sys-lbl"><span>CPU</span><span id="cpu-v">--%</span></div>
+            <div class="sys-track"><div class="sys-fill" id="cpu-bar"></div></div>
+          </div>
+          <div class="sys-item">
+            <div class="sys-lbl"><span>RAM</span><span id="ram-v">-- GB</span></div>
+            <div class="sys-track"><div class="sys-fill" id="ram-bar"></div></div>
+          </div>
+          <div class="sys-item">
+            <div class="sys-lbl"><span>DISCO C:</span><span id="disk-v">--%</span></div>
+            <div class="sys-track"><div class="sys-fill" id="disk-bar"></div></div>
+          </div>
+        </div>
+        <p class="cp-section-label" style="margin-top:20px">CONFIGURACIÓN DE AUDIO</p>
+        <div class="bat-rows" style="margin-bottom: 15px;">
+          <div class="bat-row">
+            <span>Micrófono</span>
+            <select id="mic-source-select" onchange="saveMicSource()" style="background: rgba(0,20,40,0.6); color: #00d4ff; border: 1px solid rgba(0,212,255,0.3); padding: 4px 8px; border-radius: 4px; font-family: 'Orbitron', sans-serif; font-size: 11px; cursor: pointer;">
+              <option value="auto">Automático</option>
+              <option value="tablet">Tablet / Local</option>
+              <option value="pc">Micrófono PC</option>
+            </select>
+          </div>
+        </div>
+        <p class="cp-section-label">INFORMACIÓN</p>
+        <div class="bat-rows">
+          <div class="bat-row"><span>Plataforma</span><span class="badge-d">Windows</span></div>
+          <div class="bat-row"><span>Servidor</span>  <span class="badge-d">FastAPI</span></div>
+          <div class="bat-row"><span>Python</span>    <span class="badge-d">3.11</span></div>
+        </div>
+      </div>
+
+      <!-- Quick Commands -->
+      <div id="cptab-quick" class="cptab-pane">
+        <p class="cp-section-label">COMANDOS DE VOZ</p>
+        <div class="quick-grid">
+          <button class="qbtn" onclick="sendQuick('jarvis qué hora es')">🕐 Hora</button>
+          <button class="qbtn" onclick="sendQuick('jarvis cuál es la fecha')">📅 Fecha</button>
+          <button class="qbtn" onclick="sendQuick('abre chrome')">🌐 Chrome</button>
+          <button class="qbtn" onclick="sendQuick('abre spotify')">🎵 Spotify</button>
+          <button class="qbtn" onclick="sendQuick('abre vscode')">💻 VSCode</button>
+          <button class="qbtn" onclick="sendQuick('abre discord')">💬 Discord</button>
+        </div>
+        <p class="cp-section-label" style="margin-top:16px">SMART HOME</p>
+        <div class="quick-grid">
+          <button class="qbtn qbtn-on"  onclick="sendQuick('enciende el bombillo led')">💡 Bombillo ON</button>
+          <button class="qbtn qbtn-off" onclick="sendQuick('apaga el bombillo led')">🌑 Bombillo OFF</button>
+          <button class="qbtn qbtn-on"  onclick="sendQuick('enciende el aire acondicionado')">❄️ AC ON</button>
+          <button class="qbtn qbtn-off" onclick="sendQuick('apaga el aire acondicionado')">🌡️ AC OFF</button>
+          <button class="qbtn qbtn-on"  onclick="sendQuick('enciende el enchufe pc')">🔌 Enchufe ON</button>
+          <button class="qbtn qbtn-off" onclick="sendQuick('apaga el enchufe pc')">⭕ Enchufe OFF</button>
+        </div>
+      </div>
+
+      <!-- History Log -->
+      <div id="cptab-hist" class="cptab-pane">
+        <div class="hist-header">
+          <p class="cp-section-label">HISTORIAL DE SESIÓN</p>
+          <button class="hist-clear" onclick="clearHistory()">Limpiar</button>
+        </div>
+        <div id="hist-list" class="hist-list">
+          <p class="cp-loading">Sin actividad aún</p>
+        </div>
+      </div>
+
+    </div>
+  </aside>
+
+  <!-- Central orb -->
+  <section class="orb-section">
+    <div class="orb-wrap">
+      <div class="ring r1"></div>
+      <div class="ring r2"></div>
+      <div class="ring r3"></div>
+      <div class="ring r4"></div>
+      <div id="orb" class="orb" onclick="handleOrbClick()" title="Pulsa para activar">
+        <span id="orb-label">JARVIS</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Response area -->
+  <section class="output-section">
+    <p id="response" class="response-text">—</p>
+    <p id="transcript" class="transcript-text">—</p>
+  </section>
+
+  <!-- Audio visualizer -->
+  <canvas id="viz"></canvas>
+
+  <!-- Mic button -->
+  <button id="mic-btn" class="mic-btn" onclick="handleMicBtn()" title="Pulsa para hablar">
+    <svg viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>
+    </svg>
+  </button>
+
+  <!-- Footer -->
+  <footer class="hud-footer">
+    <div id="log" class="log"></div>
+    <button class="test-btn" onclick="testCommand()">⚡ TEST</button>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
