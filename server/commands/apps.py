@@ -1,17 +1,11 @@
-import subprocess
+_SERVER_MODE_MSG = (
+    "Las aplicaciones de escritorio no están disponibles en modo servidor. "
+    "Jarvis está corriendo en Ubuntu Server."
+)
 
-_APPS: dict[str, str] = {
-    "notepad":      "notepad.exe",
-    "calculadora":  "calc.exe",
-    "explorador":   "explorer.exe",
-    "discord":      "Discord.exe",
-    "spotify":      "Spotify.exe",
-    "chrome":       "chrome.exe",
-    "vscode":       "code",
-    "paint":        "mspaint.exe",
-    "excel":        "EXCEL.EXE",
-    "word":         "WINWORD.EXE",
-    "teams":        "Teams.exe",
+_APPS = {
+    "notepad", "calculadora", "explorador", "discord", "spotify",
+    "chrome", "vscode", "paint", "excel", "word", "teams",
 }
 
 
@@ -19,11 +13,6 @@ def match(text: str) -> str | None:
     if not text.startswith("abre "):
         return None
     name = text[5:].strip()
-    exe = _APPS.get(name)
-    if not exe:
+    if name not in _APPS:
         return None
-    try:
-        subprocess.Popen(exe, shell=True)
-        return f"Abriendo {name}"
-    except Exception:
-        return f"No pude abrir {name}"
+    return _SERVER_MODE_MSG

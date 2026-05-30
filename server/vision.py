@@ -12,8 +12,13 @@ _MODEL  = "llama-3.2-11b-vision-preview"
 
 
 def _screenshot_b64() -> str:
-    from PIL import ImageGrab
-    img = ImageGrab.grab()
+    try:
+        from PIL import ImageGrab
+        img = ImageGrab.grab()
+    except Exception as e:
+        raise RuntimeError(
+            f"Captura de pantalla no disponible en este entorno (servidor headless): {e}"
+        )
     img.thumbnail((1280, 720))
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -24,7 +29,7 @@ async def see_screen(question: str = "¿Qué hay en la pantalla?") -> str:
     try:
         img_b64 = _screenshot_b64()
     except Exception as e:
-        return f"No pude tomar captura de pantalla: {e}"
+        return str(e)
 
     log.info("Enviando pantalla a Groq Vision: %s", question)
 

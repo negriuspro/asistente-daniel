@@ -94,7 +94,7 @@ async def api_battery():
 async def api_system():
     mem = psutil.virtual_memory()
     try:
-        disk = psutil.disk_usage("C:/").percent
+        disk = psutil.disk_usage("/").percent
     except Exception:
         disk = 0
     return JSONResponse({
