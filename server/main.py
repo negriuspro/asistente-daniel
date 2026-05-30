@@ -192,10 +192,16 @@ async def ws_endpoint(websocket: WebSocket):
             except Exception as e:
                 log.warning("No se pudo guardar conversación: %s", e)
             shape = _detect_shape(text)
-            ws_payload = (
-                json.dumps({"reply": response, "shape": shape}, ensure_ascii=False)
-                if shape else response
-            )
+            # response may already be JSON (e.g. open_website with open_url)
+            try:
+                payload = json.loads(response)
+                if not isinstance(payload, dict):
+                    raise ValueError
+            except (json.JSONDecodeError, ValueError):
+                payload = {"reply": response}
+            if shape:
+                payload["shape"] = shape
+            ws_payload = json.dumps(payload, ensure_ascii=False) if len(payload) > 1 else response
             await websocket.send_text(ws_payload)
             try:
                 speak(response)

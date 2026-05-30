@@ -169,6 +169,7 @@ async def process(text: str) -> str:
 
     reply = data.get("reply", "Listo.")
     actions = data.get("actions", [])
+    _pending_url: str | None = None  # URL to forward to client browser
 
     for act in actions:
         action = act.get("action", "")
@@ -178,10 +179,12 @@ async def process(text: str) -> str:
             await asyncio.sleep(params.get("ms", 1000) / 1000)
 
         elif action == "open_website":
-            await _run("open_website", {
+            url = await _run("open_website", {
                 "action": params.get("type", "search"),
                 "target": params.get("target", ""),
             })
+            if url and url.startswith("http"):
+                _pending_url = url
 
         elif action == "open_app":
             await _run("open_app", {"app_name": params.get("name", "")})
@@ -275,4 +278,6 @@ async def process(text: str) -> str:
     _history.append({"role": "assistant", "content": result})
     if len(_history) > _MAX_HIST * 2:
         _history = _history[-_MAX_HIST:]
+    if _pending_url:
+        return json.dumps({"reply": result, "open_url": _pending_url}, ensure_ascii=False)
     return result

@@ -1,16 +1,59 @@
+# Version control
 .git
+.gitignore
+
+# Antigravity / AI tooling
 .ai
+
+# Python cache
 __pycache__/
 *.py[cod]
+*.pyo
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
 .venv/
 venv/
 env/
+*.egg-info/
+
+# Node / Flutter / Android
 node_modules/
 build/
 dist/
 .dart_tool/
 android/JarvisApp/.gradle/
 android/JarvisApp/build/
-*.log
+
+# Secrets — NEVER in image
 .env
+.env.local
+
+# User data — comes from Docker volume, not image
+data/
+
+# Docs and scripts not needed in image
+docs/
+deploy/
+scripts/
+*.bat
+*.ps1
+*.md
+
+# Logs
+*.log
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Dev-only Dockerfiles
+Dockerfile.core
+Dockerfile.frontend.flutter
+docker-compose.dev.yml
+
+# Snapshot / discovery files
+snapshot.json
+tuya-raw.json

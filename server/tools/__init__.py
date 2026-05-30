@@ -1,12 +1,21 @@
+"""
+Jarvis tool executor — Linux/server-mode compatible.
+
+PC-only features (key_press, open_app, volume control) return an informational
+message instead of crashing, because Jarvis runs on a headless Ubuntu server.
+
+open_website returns the resolved URL so that ai_agent.py can forward it to
+the browser client via the WebSocket open_url field.
+"""
+
 import datetime
-import os
-import re
-import subprocess
+import logging
 import urllib.parse
-import webbrowser
 from pathlib import Path
 
-# ─── Tool schemas (Groq / OpenAI function calling format) ───────────────────
+log = logging.getLogger("jarvis.tools")
+
+# ─── Tool schemas (Groq / OpenAI function-calling format) ────────────────────
 
 TOOLS = [
     {
@@ -14,7 +23,7 @@ TOOLS = [
         "function": {
             "name": "open_website",
             "description": (
-                "Abre un sitio web en el navegador o hace una búsqueda en Google. "
+                "Abre un sitio web en el navegador del cliente o hace una búsqueda. "
                 "Usar cuando el usuario quiera ver YouTube, buscar algo, abrir redes "
                 "sociales, ver Netflix, Twitch, noticias, etc."
             ),
@@ -23,8 +32,8 @@ TOOLS = [
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["open", "search"],
-                        "description": "'open' abre un sitio directo; 'search' busca en Google",
+                        "enum": ["open", "search", "youtube"],
+                        "description": "'open' abre un sitio directo; 'search' busca en Google; 'youtube' busca video",
                     },
                     "target": {
                         "type": "string",
@@ -38,26 +47,6 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "open_app",
-            "description": (
-                "Abre una aplicación instalada en el PC. Usar para Spotify, calculadora, "
-                "bloc de notas, Paint, VS Code, Discord, Chrome, Word, Excel, etc."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "app_name": {
-                        "type": "string",
-                        "description": "Nombre de la aplicación a abrir",
-                    }
-                },
-                "required": ["app_name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "get_datetime",
             "description": "Obtiene la fecha y hora actual del sistema.",
             "parameters": {"type": "object", "properties": {}, "required": []},
@@ -65,7 +54,7 @@ TOOLS = [
     },
 ]
 
-# ─── Execution ───────────────────────────────────────────────────────────────
+# ─── Sites directory ─────────────────────────────────────────────────────────
 
 _SITES: dict[str, str] = {
     "google":     "https://google.com",
@@ -91,61 +80,42 @@ _SITES: dict[str, str] = {
     "roblox":     "https://roblox.com",
 }
 
-_APPS: dict[str, str] = {
-    "notepad":                  "notepad.exe",
-    "bloc de notas":            "notepad.exe",
-    "calculadora":              "calc.exe",
-    "calculator":               "calc.exe",
-    "explorador":               "explorer.exe",
-    "explorador de archivos":   "explorer.exe",
-    "explorador de windows":    "explorer.exe",
-    "archivos":                 "explorer.exe",
-    "carpetas":                 "explorer.exe",
-    "discord":                  "Discord.exe",
-    "spotify":                  "Spotify.exe",
-    "chrome":                   "chrome.exe",
-    "google chrome":            "chrome.exe",
-    "vscode":                   "code",
-    "vs code":                  "code",
-    "visual studio code":       "code",
-    "paint":                    "mspaint.exe",
-    "excel":                    "EXCEL.EXE",
-    "word":                     "WINWORD.EXE",
-    "powerpoint":               "POWERPNT.EXE",
-    "teams":                    "Teams.exe",
-    "terminal":                 "wt.exe",
-    "cmd":                      "cmd.exe",
-    "consola":                  "cmd.exe",
-    "task manager":             "taskmgr.exe",
-    "administrador de tareas":  "taskmgr.exe",
-    "steam":                    r"C:\Program Files (x86)\Steam\steam.exe",
-    "epic":                     r"C:\Program Files (x86)\Epic Games\Launcher\Portal\Binaries\Win32\EpicGamesLauncher.exe",
-    "epic games":               r"C:\Program Files (x86)\Epic Games\Launcher\Portal\Binaries\Win32\EpicGamesLauncher.exe",
-    "minecraft":                r"C:\Program Files (x86)\Minecraft Launcher\MinecraftLauncher.exe",
-    "whatsapp":                 r"C:\Users\je416\AppData\Local\WhatsApp\WhatsApp.exe",
-    "telegram":                 r"C:\Users\je416\AppData\Roaming\Telegram Desktop\Telegram.exe",
-    "vlc":                      r"C:\Program Files\VideoLAN\VLC\vlc.exe",
-    "reproductor":              r"C:\Program Files\VideoLAN\VLC\vlc.exe",
+_YT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "es-ES,es;q=0.9",
 }
+_YT_VIDEO_FILTER = "EgIQAQ%3D%3D"  # Videos only, no shorts
 
+_NOT_AVAILABLE = "Esta función no está disponible en modo servidor."
+
+
+# ─── Execution ───────────────────────────────────────────────────────────────
 
 def execute_tool(name: str, args: dict) -> str:
     if name == "open_website":
         return _open_website(args["action"], args["target"])
     if name == "open_app":
-        return _open_app(args["app_name"])
+        app = args.get("app_name", "")
+        log.info("open_app solicitado: '%s' — modo servidor", app)
+        return _NOT_AVAILABLE
     if name == "open_folder":
-        return _open_folder(args.get("path", ""))
+        return _NOT_AVAILABLE
     if name == "get_datetime":
         return _get_datetime()
     if name == "system_control":
-        return _system_control(args.get("command", ""), args.get("value", ""))
+        return _system_control(args.get("command", ""), str(args.get("value", "")))
     if name == "take_screenshot":
         return _take_screenshot()
     if name == "key_press":
-        return _key_press(args.get("key", ""), args.get("times", 1))
+        log.info("key_press solicitado: '%s' — modo servidor", args.get("key"))
+        return _NOT_AVAILABLE
     if name == "type_text":
-        return _type_text(args.get("text", ""))
+        log.info("type_text solicitado — modo servidor")
+        return _NOT_AVAILABLE
     if name == "smart_home":
         from ..smarthome import smart_control
         return smart_control(args.get("device", ""), args.get("action", "on"))
@@ -164,27 +134,20 @@ def execute_tool(name: str, args: dict) -> str:
     return f"Herramienta '{name}' no encontrada."
 
 
-_YT_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "es-ES,es;q=0.9",
-}
-_YT_VIDEO_FILTER = "EgIQAQ%3D%3D"  # Videos only, no shorts
-
+# ─── open_website ────────────────────────────────────────────────────────────
 
 def _youtube_first_video(query: str) -> str | None:
     """Scrape YouTube search to get first real video URL (no shorts)."""
+    import re
     try:
-        import requests
+        import httpx
         search_url = (
             f"https://www.youtube.com/results"
             f"?search_query={urllib.parse.quote_plus(query)}"
             f"&sp={_YT_VIDEO_FILTER}"
         )
-        r = requests.get(search_url, headers=_YT_HEADERS, timeout=8)
+        with httpx.Client(timeout=8, follow_redirects=True) as client:
+            r = client.get(search_url, headers=_YT_HEADERS)
         video_ids = re.findall(r'"videoId":"([A-Za-z0-9_-]{11})"', r.text)
         seen: set[str] = set()
         for vid in video_ids:
@@ -194,204 +157,81 @@ def _youtube_first_video(query: str) -> str | None:
             if f"/shorts/{vid}" in r.text:
                 continue
             return f"https://www.youtube.com/watch?v={vid}"
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("YouTube scrape falló: %s", e)
     return None
 
 
 def _open_website(action: str, target: str) -> str:
+    """Returns the resolved URL. The caller (ai_agent) forwards it to the client."""
     target_lower = target.lower().strip()
 
-    # YouTube search → get direct video URL
-    if action == "youtube" or (action == "search" and "youtube" in target_lower):
-        query = target_lower.replace("youtube", "").replace("site:youtube.com", "").strip()
+    if action in ("youtube",) or (action == "search" and "youtube" in target_lower):
+        query = target_lower.replace("youtube", "").replace("site:youtube.com", "").strip() or target_lower
         video_url = _youtube_first_video(query)
-        if video_url:
-            webbrowser.open(video_url)
-            return f"Reproduciendo en YouTube: {query}"
-        # Fallback to search page
-        webbrowser.open(f"https://youtube.com/results?search_query={urllib.parse.quote_plus(query)}&sp={_YT_VIDEO_FILTER}")
-        return f"Búsqueda en YouTube: {query}"
+        url = video_url or (
+            f"https://youtube.com/results?search_query={urllib.parse.quote_plus(query)}"
+            f"&sp={_YT_VIDEO_FILTER}"
+        )
+        log.info("YouTube URL: %s", url)
+        return url
 
     if action == "search":
         url = f"https://google.com/search?q={urllib.parse.quote(target)}"
-        webbrowser.open(url)
-        return f"Búsqueda abierta: {target}"
+        log.info("Búsqueda URL: %s", url)
+        return url
 
-    # Direct site open — check if youtube to play directly
     url = _SITES.get(target_lower)
     if not url:
         url = f"https://{target}" if "." in target else f"https://{target_lower}.com"
-    webbrowser.open(url)
-    return f"Sitio abierto: {target}"
+    log.info("Sitio URL: %s", url)
+    return url
 
 
-def _open_app(app_name: str) -> str:
-    name_lower = app_name.lower().strip()
-
-    # Partial match against known dict
-    exe = None
-    for key, val in _APPS.items():
-        if key in name_lower or name_lower in key:
-            exe = val
-            break
-    if not exe:
-        exe = _APPS.get(name_lower)
-
-    try:
-        if exe == "explorer.exe" or exe is None and ("explorador" in name_lower or "explorer" in name_lower):
-            subprocess.Popen(["C:\\Windows\\explorer.exe"])
-        elif exe:
-            subprocess.Popen(exe, shell=True)
-        else:
-            # Fallback: Windows START finds installed apps by name
-            subprocess.Popen(f'start "" "{app_name}"', shell=True)
-        return f"Aplicación abierta: {app_name}"
-    except Exception as e:
-        return f"No pude abrir {app_name}: {e}"
-
-
-_KNOWN_FOLDERS: dict[str, str] = {
-    "descargas":    str(Path.home() / "Downloads"),
-    "downloads":    str(Path.home() / "Downloads"),
-    "documentos":   str(Path.home() / "Documents"),
-    "documents":    str(Path.home() / "Documents"),
-    "escritorio":   str(Path.home() / "Desktop"),
-    "desktop":      str(Path.home() / "Desktop"),
-    "imágenes":     str(Path.home() / "Pictures"),
-    "imagenes":     str(Path.home() / "Pictures"),
-    "música":       str(Path.home() / "Music"),
-    "musica":       str(Path.home() / "Music"),
-    "videos":       str(Path.home() / "Videos"),
-}
-
-
-def _open_folder(path: str) -> str:
-    path_lower = path.lower().strip()
-    resolved = _KNOWN_FOLDERS.get(path_lower)
-
-    if not resolved:
-        # Try Desktop, Documents, Downloads subfolder
-        candidates = [
-            Path.home() / "Desktop" / path,
-            Path.home() / "Documents" / path,
-            Path.home() / "Downloads" / path,
-            Path(path),
-        ]
-        for c in candidates:
-            if c.exists():
-                resolved = str(c)
-                break
-
-    if not resolved:
-        resolved = str(Path.home() / "Desktop")
-
-    try:
-        subprocess.Popen(["C:\\Windows\\explorer.exe", resolved])
-        return f"Carpeta abierta: {path}"
-    except Exception as e:
-        return f"No pude abrir la carpeta: {e}"
-
+# ─── system_control ──────────────────────────────────────────────────────────
 
 def _system_control(command: str, value: str = "") -> str:
-    cmd_lower = command.lower()
+    cmd = command.lower()
 
-    if cmd_lower in ("shutdown", "apagar"):
-        subprocess.Popen("shutdown /s /t 10", shell=True)
-        return "Apagando el PC en 10 segundos."
+    if cmd in ("volume_up", "volume_down", "mute", "silenciar", "mutear",
+               "subir volumen", "bajar volumen"):
+        return (
+            "Control de volumen del PC no disponible en modo servidor. "
+            "Usa los comandos de TV o Google Home para controlar el volumen."
+        )
 
-    if cmd_lower in ("restart", "reiniciar"):
-        subprocess.Popen("shutdown /r /t 10", shell=True)
-        return "Reiniciando el PC en 10 segundos."
+    if cmd in ("shutdown", "apagar"):
+        return "Apagado del sistema desactivado en modo servidor Docker."
 
-    if cmd_lower in ("cancel_shutdown", "cancelar apagado"):
-        subprocess.Popen("shutdown /a", shell=True)
-        return "Apagado cancelado."
+    if cmd in ("restart", "reiniciar"):
+        return "Reinicio del sistema desactivado en modo servidor Docker."
 
-    if cmd_lower in ("lock", "bloquear"):
-        subprocess.Popen("rundll32.exe user32.dll,LockWorkStation", shell=True)
-        return "PC bloqueado."
+    if cmd in ("cancel_shutdown", "cancelar apagado"):
+        return "No hay apagado pendiente."
 
-    if cmd_lower in ("volume_up", "subir volumen"):
-        steps = int(value) if str(value).isdigit() else 2
-        try:
-            import pyautogui
-            pyautogui.FAILSAFE = False
-            pyautogui.press("volumeup", presses=steps, interval=0.05)
-        except Exception:
-            for _ in range(steps):
-                subprocess.Popen(
-                    'powershell -c "(New-Object -ComObject WScript.Shell).SendKeys([char]175)"',
-                    shell=True,
-                )
-        return f"Volumen subido {steps} paso{'s' if steps != 1 else ''}."
+    if cmd in ("lock", "bloquear"):
+        return "Bloqueo de pantalla no disponible en modo servidor."
 
-    if cmd_lower in ("volume_down", "bajar volumen"):
-        steps = int(value) if str(value).isdigit() else 2
-        try:
-            import pyautogui
-            pyautogui.FAILSAFE = False
-            pyautogui.press("volumedown", presses=steps, interval=0.05)
-        except Exception:
-            for _ in range(steps):
-                subprocess.Popen(
-                    'powershell -c "(New-Object -ComObject WScript.Shell).SendKeys([char]174)"',
-                    shell=True,
-                )
-        return f"Volumen bajado {steps} paso{'s' if steps != 1 else ''}."
-
-    if cmd_lower in ("mute", "silenciar", "mutear"):
-        try:
-            import pyautogui
-            pyautogui.FAILSAFE = False
-            pyautogui.press("volumemute")
-        except Exception:
-            subprocess.Popen(
-                'powershell -c "(New-Object -ComObject WScript.Shell).SendKeys([char]173)"',
-                shell=True,
-            )
-        return "Audio silenciado."
-
-    if cmd_lower in ("screenshot", "captura"):
+    if cmd in ("screenshot", "captura"):
         return _take_screenshot()
 
-    return f"Comando '{command}' no reconocido."
+    return f"Comando '{command}' no disponible en modo servidor."
 
+
+# ─── screenshot ──────────────────────────────────────────────────────────────
 
 def _take_screenshot() -> str:
     try:
-        import PIL.ImageGrab as ig
-        path = Path.home() / "Desktop" / f"jarvis_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-        img = ig.grab()
+        from PIL import ImageGrab
+        path = Path("/tmp") / f"jarvis_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        img = ImageGrab.grab()
         img.save(str(path))
-        return f"Captura guardada en el escritorio: {path.name}"
-    except ImportError:
-        # Fallback: Windows Snipping Tool
-        subprocess.Popen("snippingtool", shell=True)
-        return "Abriendo herramienta de captura."
+        return f"Captura guardada en: {path.name}"
     except Exception as e:
-        return f"No pude tomar captura: {e}"
+        return f"Captura de pantalla no disponible en modo servidor: {e}"
 
 
-def _key_press(key: str, times: int = 1) -> str:
-    try:
-        import pyautogui
-        pyautogui.FAILSAFE = False
-        pyautogui.press(key, presses=int(times), interval=0.05)
-        return f"Tecla '{key}' presionada {times} veces."
-    except Exception as e:
-        return f"Error al presionar tecla: {e}"
-
-
-def _type_text(text: str) -> str:
-    try:
-        import pyautogui
-        pyautogui.FAILSAFE = False
-        pyautogui.write(text, interval=0.04)
-        return f"Texto escrito: {text}"
-    except Exception as e:
-        return f"Error al escribir: {e}"
-
+# ─── datetime ────────────────────────────────────────────────────────────────
 
 def _get_datetime() -> str:
     now = datetime.datetime.now()

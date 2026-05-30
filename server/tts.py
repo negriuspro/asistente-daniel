@@ -1,8 +1,16 @@
+"""
+TTS (Text-to-Speech) para Jarvis.
+
+En modo servidor headless (Ubuntu sin audio), el TTS se deshabilita
+automáticamente: sin pygame → sin ElevenLabs playback, sin espeak device
+→ pyttsx3 no habla. Los logs indican el texto que se hablaría.
+El cliente (navegador) maneja su propio TTS via Web Speech API.
+"""
+
 import io
 import logging
 import os
 import queue
-import tempfile
 import threading
 from pathlib import Path
 
@@ -15,31 +23,31 @@ log = logging.getLogger("jarvis.tts")
 _q: queue.Queue = queue.Queue()
 
 _ELEVEN_KEY   = os.environ.get("ELEVENLABS_API_KEY", "")
-_ELEVEN_VOICE = os.environ.get("ELEVENLABS_VOICE_ID", "onwK4e9ZLuTAKqWW03F9")  # Daniel — british, deep
+_ELEVEN_VOICE = os.environ.get("ELEVENLABS_VOICE_ID", "onwK4e9ZLuTAKqWW03F9")
 _ELEVEN_MODEL = "eleven_multilingual_v2"
 
-# Jarvis voice settings — calm, sophisticated, cinematic
 _ELEVEN_SETTINGS = {
-    "stability":        0.50,   # 45-60%: natural variance without instability
-    "similarity_boost": 0.75,   # 70-85%: clear, well-defined voice
-    "style":            0.20,   # 15-25%: subtle style expression
+    "stability":         0.50,
+    "similarity_boost":  0.75,
+    "style":             0.20,
     "use_speaker_boost": True,
 }
-_ELEVEN_SPEED = 0.92  # slightly slower than default — more deliberate, intelligent feel
+_ELEVEN_SPEED = 0.92
 
-# Initialize pygame mixer once at module level
+# Try to initialize pygame for audio playback (optional — fails gracefully on headless)
 try:
     import pygame as _pygame
     _pygame.mixer.init()
     _pygame_ok = True
+    log.info("TTS: pygame audio inicializado.")
 except Exception as _e:
-    log.warning("pygame no disponible para TTS: %s", _e)
+    log.info("TTS: pygame no disponible (%s) — audio del servidor desactivado.", _e)
     _pygame_ok = False
 
 
 def _speak_elevenlabs(text: str) -> bool:
     if not _pygame_ok:
-        log.error("pygame no inicializado — no se puede reproducir audio ElevenLabs")
+        log.info("TTS ElevenLabs omitido (sin audio en servidor): %s", text[:60])
         return False
     try:
         import httpx
@@ -76,7 +84,6 @@ def _worker():
     engine = None
 
     if not _ELEVEN_KEY:
-        # Fallback: pyttsx3
         try:
             import pyttsx3
             engine = pyttsx3.init()
@@ -88,15 +95,18 @@ def _worker():
                  if "spanish" in v.name.lower()
                  or "es_" in v.id.lower()
                  or "helena" in v.name.lower()
-                 or "sabina" in v.name.lower()),
+                 or "sabina" in v.name.lower()
+                 or "es" in v.id.lower()),
                 None,
             )
             if spanish:
                 engine.setProperty("voice", spanish.id)
-                log.info("Voz española pyttsx3: %s", spanish.name)
-            log.info("TTS fallback (pyttsx3) listo.")
+                log.info("TTS pyttsx3: voz española '%s'", spanish.name)
+            else:
+                log.info("TTS pyttsx3: sin voz española encontrada, usando default")
+            log.info("TTS fallback (pyttsx3 + espeak) listo.")
         except Exception as e:
-            log.error("pyttsx3 no pudo iniciar: %s", e)
+            log.info("TTS pyttsx3 no disponible (%s) — servidor sin audio.", e)
     else:
         log.info("TTS: ElevenLabs activo — voz %s", _ELEVEN_VOICE)
 
@@ -106,15 +116,15 @@ def _worker():
             break
 
         if _ELEVEN_KEY:
-            if not _speak_elevenlabs(text):
-                log.warning("ElevenLabs falló — sin audio de respaldo.")
+            _speak_elevenlabs(text)
         elif engine:
             try:
-                log.info("TTS hablando: %s", text)
                 engine.say(text)
                 engine.runAndWait()
             except Exception as e:
-                log.error("pyttsx3 error al hablar: %s", e)
+                log.error("pyttsx3 error: %s", e)
+        else:
+            log.info("TTS (sin audio): %s", text[:80])
 
 
 threading.Thread(target=_worker, daemon=True).start()

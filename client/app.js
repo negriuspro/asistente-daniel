@@ -69,6 +69,9 @@ function connectWS() {
       if (parsed.reply !== undefined) {
         reply = parsed.reply;
         if (parsed.shape && window._setShape) window._setShape(parsed.shape);
+        if (parsed.open_url) {
+          try { window.open(parsed.open_url, '_blank', 'noopener,noreferrer'); } catch (_) {}
+        }
       }
     } catch (_) {}
     showResponse(reply);
@@ -257,7 +260,7 @@ function deactivate() {
   document.getElementById('mic-btn')?.classList.remove('recording');
 }
 
-function dispatch(text) {��──────── */
+function dispatch(text) {��──────── */
 function handleTranscript(text, isFinal) {
   const lower = text.toLowerCase();
   if (!isActive && WAKE_WORDS.some(w => lower.includes(w))) activate();
