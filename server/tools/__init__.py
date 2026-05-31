@@ -131,6 +131,8 @@ def execute_tool(name: str, args: dict) -> str:
     if name == "reminder":
         from ..reminder import set_reminder
         return set_reminder(args.get("message", ""), args.get("time", ""), args.get("date", "today"))
+    if name == "system_info":
+        return _system_info()
     return f"Herramienta '{name}' no encontrada."
 
 
@@ -232,6 +234,25 @@ def _take_screenshot() -> str:
 
 
 # ─── datetime ────────────────────────────────────────────────────────────────
+
+def _system_info() -> str:
+    import psutil
+    cpu = psutil.cpu_percent(interval=1)
+    mem = psutil.virtual_memory()
+    try:
+        disk = psutil.disk_usage("/").percent
+    except Exception:
+        disk = 0
+    batt = psutil.sensors_battery()
+    batt_str = ""
+    if batt:
+        plug = "enchufado" if batt.power_plugged else "en batería"
+        batt_str = f", batería {batt.percent:.0f}% ({plug})"
+    return (
+        f"CPU: {cpu}% | RAM: {mem.percent:.0f}% ({mem.used/1024**3:.1f}/{mem.total/1024**3:.1f} GB)"
+        f" | Disco: {disk:.0f}%{batt_str}"
+    )
+
 
 def _get_datetime() -> str:
     now = datetime.datetime.now()

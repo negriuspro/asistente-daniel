@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from groq import AsyncGroq, RateLimitError
 
 from .tools import execute_tool
 from .memory import get_context as _mem_context
@@ -14,14 +13,7 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 log = logging.getLogger("jarvis.ai")
 
-_client = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY", ""))
-_MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
-    "llama3-8b-8192",
-]
-
-# Conversational history — keeps last 3 turns for context
+# ─── Conversation history ─────────────────────────────────────────────────────
 _history: list[dict] = []
 _MAX_HIST = 6
 
@@ -29,7 +21,9 @@ _MAX_HIST = 6
 def clear_history() -> None:
     _history.clear()
 
-_SYSTEM = """Eres Jarvis. Asistente personal de IA. No eres un chatbot — eres el asistente de confianza de quien te habla.
+
+# ─── System prompt ────────────────────────────────────────────────────────────
+_SYSTEM = """Eres Daniel. Asistente personal de IA. No eres un chatbot — eres el asistente de confianza de quien te habla.
 
 IDENTIDAD: Directo. Competente. Leal. Seco. Ejecutás primero, comentás después. Nunca al revés.
 NUNCA digas: "claro que sí", "por supuesto", "entendido", "con gusto", "¡Perfecto!", "¡Claro!".
@@ -58,59 +52,58 @@ ACCIONES DISPONIBLES:
 - key_press: {"key": "tecla", "times": N} — tab, enter, l, j, k, f, m, space, left, right, up, down, escape, 0-9
 - type_text: {"text": "texto"}
 - wait: {"ms": N}
-- system_control: {"command": "volume_up/volume_down/mute/lock/shutdown/restart/screenshot", "value": N} — para volumen N es el número de pasos (default 2)
+- system_control: {"command": "volume_up/volume_down/mute/lock/shutdown/restart/suspend/screenshot", "value": N}
 - smart_home: {"device": "nombre", "action": "on/off"}
-- ac_control: {"device": "aire acondicionado", "power": "on/off", "temp": 16-30, "mode": "frio/calor/auto/ventilacion/seco", "fan": "auto/bajo/medio/alto"} — para el aire: temperatura, modo y ventilador. Campos opcionales.
-- tv_control: {"command": "volume_up/volume_down/mute/volume_set/pause/play/stop/off/status", "value": "N o video_id"}
-- google_home: {"command": "volume_up/volume_down/mute/volume_set/pause/play/stop/youtube/spotify/status", "value": "N o búsqueda"}
+- ac_control: {"device": "aire acondicionado", "power": "on/off", "temp": 16-30, "mode": "frio/calor/auto/ventilacion/seco", "fan": "auto/bajo/medio/alto"}
+- tv_control: {"command": "volume_up/volume_down/mute/volume_set/pause/play/stop/off/status", "value": "N"}
+- google_home: {"command": "volume_up/volume_down/mute/volume_set/pause/play/stop/youtube/spotify/status", "value": "N"}
+- spotify_control: {"action": "play/pause/next/prev/search/volume/now_playing", "query": "canción o artista", "volume": 0-100}
+- get_weather: {"location": "ciudad o 'mi ubicación'"}
+- movies_info: {"query": "película o serie", "type": "movie/tv/trending"}
 - web_search: {"query": "búsqueda"} — busca en internet y resume
 - remember: {"key": "nombre", "value": "valor", "category": "identity/preferences/notes/projects"}
 - forget: {"key": "nombre"}
 - reminder: {"message": "qué recordar", "time": "17:00 o 5pm", "date": "today"}
 - screen_vision: {"question": "pregunta sobre la pantalla"}
 - get_datetime: {}
+- system_info: {} — CPU, RAM, disco, batería
 - chat: {} — solo para conversación sin acción
 
-YouTube: l=+10s, j=-10s, k=pausa, f=pantalla completa, m=mute. 10 minutos = 60 veces "l".
+YouTube: l=+10s, j=-10s, k=pausa, f=pantalla completa, m=mute.
 
 EJEMPLOS:
 "abre youtube y pon el primer video" → {"reply": "Ahí va.", "actions": [{"action": "open_website", "params": {"type": "open", "target": "youtube"}}, {"action": "wait", "params": {"ms": 4000}}, {"action": "key_press", "params": {"key": "tab", "times": 4}}, {"action": "key_press", "params": {"key": "enter", "times": 1}}]}
 "pon reggaeton" → {"reply": "", "actions": [{"action": "open_website", "params": {"type": "youtube", "target": "reggaeton"}}]}
-"busca videos de Roblox" → {"reply": "", "actions": [{"action": "open_website", "params": {"type": "youtube", "target": "roblox"}}]}
 "sube el volumen" → {"reply": "", "actions": [{"action": "system_control", "params": {"command": "volume_up"}}]}
-"baja el volumen" → {"reply": "", "actions": [{"action": "system_control", "params": {"command": "volume_down"}}]}
 "silencio" → {"reply": "Mute.", "actions": [{"action": "system_control", "params": {"command": "mute"}}]}
 "qué hora es" → {"reply": "", "actions": [{"action": "get_datetime", "params": {}}]}
 "apaga el pc" → {"reply": "Apagando en 10 segundos.", "actions": [{"action": "system_control", "params": {"command": "shutdown"}}]}
+"suspende el pc" → {"reply": "Suspendiendo.", "actions": [{"action": "system_control", "params": {"command": "suspend"}}]}
 "sube el volumen de la tv" → {"reply": "", "actions": [{"action": "tv_control", "params": {"command": "volume_up", "value": "2"}}]}
-"baja el volumen de la tv 5" → {"reply": "", "actions": [{"action": "tv_control", "params": {"command": "volume_down", "value": "5"}}]}
 "apaga la tv" → {"reply": "Listo.", "actions": [{"action": "tv_control", "params": {"command": "off"}}]}
-"pausa la tv" → {"reply": "", "actions": [{"action": "tv_control", "params": {"command": "pause"}}]}
-"pon youtube en la tv" → {"reply": "", "actions": [{"action": "tv_control", "params": {"command": "youtube"}}]}
-"pon netflix en la tv" → {"reply": "", "actions": [{"action": "tv_control", "params": {"command": "netflix"}}]}
-"sube el volumen de la televisión" → {"reply": "", "actions": [{"action": "tv_control", "params": {"command": "volume_up", "value": "3"}}]}
-
-IMPORTANTE: cualquier mención de "tv", "televisión", "televisor" → usar tv_control, NO open_website.
-"google home", "altavoz", "bocina" → usar google_home.
-"enciende el enchufe" → {"reply": "Hecho.", "actions": [{"action": "smart_home", "params": {"device": "enchufe", "action": "on"}}]}
-"apaga la lámpara" → {"reply": "Listo.", "actions": [{"action": "smart_home", "params": {"device": "lámpara", "action": "off"}}]}
-"enciende el aire" → {"reply": "", "actions": [{"action": "ac_control", "params": {"device": "aire acondicionado", "power": "on"}}]}
-"apaga el aire" → {"reply": "", "actions": [{"action": "ac_control", "params": {"device": "aire acondicionado", "power": "off"}}]}
-"pon el aire a 22 grados" → {"reply": "", "actions": [{"action": "ac_control", "params": {"device": "aire acondicionado", "power": "on", "temp": 22}}]}
-"pon el aire en frío a 20" → {"reply": "", "actions": [{"action": "ac_control", "params": {"device": "aire acondicionado", "power": "on", "temp": 20, "mode": "frio"}}]}
-"pon el ventilador del aire en alto" → {"reply": "", "actions": [{"action": "ac_control", "params": {"device": "aire acondicionado", "fan": "alto"}}]}
+"pausa spotify" → {"reply": "", "actions": [{"action": "spotify_control", "params": {"action": "pause"}}]}
+"siguiente canción" → {"reply": "", "actions": [{"action": "spotify_control", "params": {"action": "next"}}]}
+"pon a Bad Bunny en spotify" → {"reply": "", "actions": [{"action": "spotify_control", "params": {"action": "search", "query": "Bad Bunny"}}]}
+"qué clima hace en Madrid" → {"reply": "", "actions": [{"action": "get_weather", "params": {"location": "Madrid"}}]}
+"qué tiempo hace" → {"reply": "", "actions": [{"action": "get_weather", "params": {"location": "mi ubicación"}}]}
+"recomiéndame una película de terror" → {"reply": "", "actions": [{"action": "movies_info", "params": {"query": "terror", "type": "movie"}}]}
+"qué hay de trending en series" → {"reply": "", "actions": [{"action": "movies_info", "params": {"query": "trending", "type": "tv"}}]}
+"información del sistema" → {"reply": "", "actions": [{"action": "system_info", "params": {}}]}
+"cuánta RAM tengo" → {"reply": "", "actions": [{"action": "system_info", "params": {}}]}
 "busca el precio del iPhone" → {"reply": "Buscando.", "actions": [{"action": "web_search", "params": {"query": "precio iPhone 16 2025"}}]}
-"qué es la IA" → {"reply": "Buscando.", "actions": [{"action": "web_search", "params": {"query": "qué es la inteligencia artificial"}}]}
 "recuerda que me llamo Juan" → {"reply": "Anotado.", "actions": [{"action": "remember", "params": {"key": "nombre", "value": "Juan", "category": "identity"}}]}
-"me gusta el rock" → {"reply": "Anotado.", "actions": [{"action": "remember", "params": {"key": "música favorita", "value": "rock", "category": "preferences"}}]}
 "recuérdame a las 5pm la reunión" → {"reply": "Recordatorio a las 5.", "actions": [{"action": "reminder", "params": {"message": "Tienes una reunión", "time": "5pm"}}]}
 "qué hay en mi pantalla" → {"reply": "Analizando.", "actions": [{"action": "screen_vision", "params": {"question": "¿Qué hay en la pantalla?"}}]}
-"qué dice ese texto" → {"reply": "", "actions": [{"action": "screen_vision", "params": {"question": "¿Qué texto hay en la pantalla?"}}]}
 "hola" → {"reply": "¿Qué necesita?", "actions": [{"action": "chat", "params": {}}]}
-"cómo estás" → {"reply": "Operativo al 100%. ¿Qué necesita?", "actions": [{"action": "chat", "params": {}}]}
+
+IMPORTANTE: cualquier mención de "tv", "televisión", "televisor" → usar tv_control.
+"google home", "altavoz", "bocina" → usar google_home.
+"spotify", "pausa", "siguiente canción", "anterior" → usar spotify_control.
 
 REGLA FINAL: Solo JSON. Sin texto antes ni después. Reply máximo 6 palabras."""
 
+
+# ─── JSON extractor ───────────────────────────────────────────────────────────
 
 def _first_json(text: str) -> dict | None:
     start = text.find("{")
@@ -124,52 +117,119 @@ def _first_json(text: str) -> dict | None:
             depth -= 1
             if depth == 0:
                 try:
-                    return json.loads(text[start : i + 1])
+                    return json.loads(text[start: i + 1])
                 except json.JSONDecodeError:
                     return None
     return None
 
 
+# ─── LLM calls ───────────────────────────────────────────────────────────────
+
+async def _call_gemini(system: str, history: list[dict], user_msg: str) -> str:
+    """Gemini 2.0 Flash — primary LLM."""
+    import google.generativeai as genai
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY no configurada")
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(
+        model_name="gemini-2.0-flash",
+        system_instruction=system,
+        generation_config=genai.types.GenerationConfig(
+            temperature=0.1,
+            max_output_tokens=512,
+        ),
+    )
+
+    # Build Gemini-format history (must be alternating user/model pairs)
+    gemini_history = []
+    for msg in history:
+        role = "model" if msg["role"] == "assistant" else "user"
+        gemini_history.append({"role": role, "parts": [msg["content"]]})
+
+    def _sync() -> str:
+        chat = model.start_chat(history=gemini_history)
+        resp = chat.send_message(user_msg)
+        return resp.text
+
+    return await asyncio.to_thread(_sync)
+
+
+async def _call_groq(system: str, messages: list[dict]) -> str:
+    """Groq Llama — fallback LLM."""
+    from groq import AsyncGroq, RateLimitError
+    api_key = os.environ.get("GROQ_API_KEY", "")
+    if not api_key:
+        raise ValueError("GROQ_API_KEY no configurada")
+
+    client = AsyncGroq(api_key=api_key)
+    models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-8b-8192"]
+    full_messages = [{"role": "system", "content": system}] + messages
+
+    for model in models:
+        try:
+            resp = await client.chat.completions.create(
+                model=model,
+                messages=full_messages,
+                max_tokens=512,
+                temperature=0.1,
+            )
+            return resp.choices[0].message.content or ""
+        except RateLimitError:
+            log.warning("Rate limit en %s — probando siguiente modelo", model)
+    raise RuntimeError("Todos los modelos Groq agotaron su límite.")
+
+
+async def _llm(system: str, history: list[dict], user_msg: str) -> str:
+    """Try Gemini first, fall back to Groq."""
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if gemini_key:
+        try:
+            return await _call_gemini(system, history, user_msg)
+        except Exception as e:
+            log.warning("Gemini falló (%s) — usando Groq como respaldo", e)
+
+    groq_messages = history + [{"role": "user", "content": user_msg}]
+    return await _call_groq(system, groq_messages)
+
+
+# ─── Tool runner ─────────────────────────────────────────────────────────────
+
 async def _run(tool: str, args: dict) -> str:
     return await asyncio.to_thread(execute_tool, tool, args)
 
+
+# ─── Main process ─────────────────────────────────────────────────────────────
 
 async def process(text: str) -> str:
     global _history
     mem = _mem_context()
     system = _SYSTEM + (f"\n\n{mem}" if mem else "")
 
-    _history.append({"role": "user", "content": text})
-    messages = [{"role": "system", "content": system}] + _history[-_MAX_HIST:]
+    # History passed to LLM (without current message — added below)
+    hist_for_llm = list(_history[-_MAX_HIST:])
 
     raw = ""
-    for model in _MODELS:
-        try:
-            resp = await _client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=512,
-                temperature=0.1,
-            )
-            raw = resp.choices[0].message.content or ""
-            break
-        except RateLimitError:
-            log.warning("Rate limit en %s — probando modelo de respaldo", model)
-    else:
-        _history.pop()  # don't record the failed attempt
-        return "Límite de solicitudes alcanzado. Intenta en unos minutos."
+    try:
+        raw = await _llm(system, hist_for_llm, text)
+    except Exception as e:
+        log.error("LLM error: %s", e)
+        return "Sin conexión con la IA. Verifica tus API keys."
+
+    # Record this turn
+    _history.append({"role": "user", "content": text})
+    _history.append({"role": "assistant", "content": raw})
+    if len(_history) > _MAX_HIST * 2:
+        _history = _history[-_MAX_HIST * 2:]
 
     data = _first_json(raw)
     if not data:
-        result = raw or "No entendí eso."
-        _history.append({"role": "assistant", "content": result})
-        if len(_history) > _MAX_HIST * 2:
-            _history = _history[-_MAX_HIST:]
-        return result
+        return raw or "No entendí eso."
 
     reply = data.get("reply", "Listo.")
     actions = data.get("actions", [])
-    _pending_url: str | None = None  # URL to forward to client browser
+    _pending_url: str | None = None
 
     for act in actions:
         action = act.get("action", "")
@@ -193,10 +253,7 @@ async def process(text: str) -> str:
             await _run("open_folder", {"path": params.get("path", "")})
 
         elif action == "key_press":
-            await _run("key_press", {
-                "key": params.get("key", ""),
-                "times": params.get("times", 1),
-            })
+            await _run("key_press", {"key": params.get("key", ""), "times": params.get("times", 1)})
 
         elif action == "type_text":
             await _run("type_text", {"text": params.get("text", "")})
@@ -209,6 +266,9 @@ async def process(text: str) -> str:
 
         elif action == "get_datetime":
             return await _run("get_datetime", {})
+
+        elif action == "system_info":
+            return await _run("system_info", {})
 
         elif action == "take_screenshot":
             return await _run("take_screenshot", {})
@@ -274,10 +334,28 @@ async def process(text: str) -> str:
                 str(params.get("value", "")),
             )
 
+        elif action == "spotify_control":
+            from .spotify_control import handle_spotify
+            return await asyncio.to_thread(
+                handle_spotify,
+                params.get("action", "now_playing"),
+                params.get("query", ""),
+                int(params.get("volume", -1)),
+            )
+
+        elif action == "get_weather":
+            from .weather import get_weather
+            return await get_weather(params.get("location", ""))
+
+        elif action == "movies_info":
+            from .tmdb_client import search_content
+            return await asyncio.to_thread(
+                search_content,
+                params.get("query", ""),
+                params.get("type", "movie"),
+            )
+
     result = reply or "Listo."
-    _history.append({"role": "assistant", "content": result})
-    if len(_history) > _MAX_HIST * 2:
-        _history = _history[-_MAX_HIST:]
     if _pending_url:
         return json.dumps({"reply": result, "open_url": _pending_url}, ensure_ascii=False)
     return result

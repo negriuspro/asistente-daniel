@@ -1,11 +1,12 @@
 import asyncio
 import json
 import logging
+import re
+import tempfile
 from pathlib import Path
 
-import groq as _groq
 import psutil
-from fastapi import FastAPI, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -24,11 +25,11 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
 )
-log = logging.getLogger("jarvis")
+log = logging.getLogger("daniel")
 
 CLIENT_DIR = Path(__file__).parent.parent / "client"
 
-app = FastAPI()
+app = FastAPI(title="Daniel AI Assistant")
 app.include_router(docker_router)
 
 
@@ -36,18 +37,57 @@ class _CtrlBody(BaseModel):
     on: bool
 
 
-@app.get("/health")
-async def health():
-    return JSONResponse({"status": "ok"})
+# ─── Wake-word pattern (responds to "Daniel" and common mishearings) ──────────
+_WAKE_RE = re.compile(
+    r'(?i)^[\s,.]*(daniel|danial|danie|danielle|danil|daniyel|danieel|daniele|dani)[\s,.]*',
+)
 
+
+def _strip_wake_word(text: str) -> str:
+    return _WAKE_RE.sub("", text).strip()
+
+
+def _has_wake_word(text: str) -> bool:
+    return bool(_WAKE_RE.match(text))
+
+
+# ─── Shape detection ──────────────────────────────────────────────────────────
+
+_SHAPE_MAP = {
+    'galaxia': 'galaxy', 'galaxy': 'galaxy',
+    'cerebro': 'brain',  'brain': 'brain',  'mente': 'brain',
+    'música':  'wave',   'musica': 'wave',   'onda': 'wave',   'wave': 'wave',
+    'adn':     'dna',    'dna': 'dna',       'espiral': 'dna',
+    'anillo':  'ring',   'ring': 'ring',
+    'estrella':'star',   'star': 'star',
+    'árbol':   'tree',   'arbol': 'tree',    'tree': 'tree',
+}
+
+
+def _detect_shape(text: str):
+    lower = text.lower()
+    for kw, shape in _SHAPE_MAP.items():
+        if kw in lower:
+            return shape
+    return None
+
+
+# ─── Startup ──────────────────────────────────────────────────────────────────
 
 @app.on_event("startup")
 async def startup() -> None:
-    psutil.cpu_percent()  # initialize CPU sampling counter
+    psutil.cpu_percent()
     asyncio.create_task(_bm_monitor())
 
 
-# ── REST API ────────────────────────────────────────────────────
+# ─── Health ───────────────────────────────────────────────────────────────────
+
+@app.get("/health")
+async def health():
+    return JSONResponse({"status": "ok", "assistant": "Daniel"})
+
+
+# ─── REST API ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/devices")
 async def api_devices():
@@ -97,37 +137,53 @@ async def api_system():
         disk = psutil.disk_usage("/").percent
     except Exception:
         disk = 0
+    batt = psutil.sensors_battery()
     return JSONResponse({
         "cpu":       round(psutil.cpu_percent(interval=None), 1),
         "ram":       round(mem.percent, 1),
         "ram_used":  round(mem.used  / 1024 ** 3, 1),
         "ram_total": round(mem.total / 1024 ** 3, 1),
         "disk":      round(disk, 1),
+        "battery":   round(batt.percent, 1) if batt else None,
+        "plugged":   batt.power_plugged if batt else None,
     })
 
 
-# ── Shape detection ─────────────────────────────────────────────
-
-_SHAPE_MAP = {
-    'galaxia': 'galaxy', 'galaxy': 'galaxy',
-    'cerebro': 'brain',  'brain': 'brain',  'mente': 'brain',
-    'música':  'wave',   'musica': 'wave',   'onda': 'wave',   'wave': 'wave',
-    'adn':     'dna',    'dna': 'dna',       'espiral': 'dna',
-    'anillo':  'ring',   'ring': 'ring',
-    'estrella':'star',   'star': 'star',
-    'árbol':   'tree',   'arbol': 'tree',    'tree': 'tree',
-}
+@app.get("/api/weather")
+async def api_weather(location: str = Query(default="")):
+    from .weather import get_weather
+    result = await get_weather(location)
+    return JSONResponse({"result": result})
 
 
-def _detect_shape(text: str):
-    lower = text.lower()
-    for kw, shape in _SHAPE_MAP.items():
-        if kw in lower:
-            return shape
-    return None
+@app.get("/api/movies")
+async def api_movies(query: str = Query(...), type: str = Query(default="movie")):
+    from .tmdb_client import search_content
+    result = await asyncio.to_thread(search_content, query, type)
+    return JSONResponse({"result": result})
 
 
-# ── WebSocket + STT ─────────────────────────────────────────────
+@app.post("/api/process-file")
+async def api_process_file(
+    file: UploadFile = File(...),
+    instruction: str = Form(default=""),
+):
+    from .file_processor import process_file
+    suffix = Path(file.filename or "file").suffix or ".bin"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
+    try:
+        result = await asyncio.to_thread(process_file, tmp_path, instruction)
+    finally:
+        try:
+            Path(tmp_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+    return JSONResponse({"result": result, "filename": file.filename})
+
+
+# ─── Transcribe endpoint ─────────────────────────────────────────────────────
 
 @app.post("/transcribe")
 async def transcribe_endpoint(audio: UploadFile):
@@ -136,63 +192,67 @@ async def transcribe_endpoint(audio: UploadFile):
     return JSONResponse({"text": text})
 
 
+# ─── WebSocket — always-listening mode ───────────────────────────────────────
+
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
     log.info("Cliente conectado: %s", websocket.client)
     try:
         while True:
-            text = await websocket.receive_text()
+            msg = await websocket.receive_text()
 
-            # PC mic mode: tablet detected wake word, server records from PC mic
-            if text == "__activate__":
+            # Client sends raw audio blob path or special signals
+            if msg == "__activate__":
+                # PC mic fallback: client detected wake word, record from server mic
                 log.info("Wake word recibido — grabando desde micrófono del PC...")
                 try:
                     from .mic import record_command
                     audio_bytes = await record_command()
                     if not audio_bytes:
-                        await websocket.send_text("No detecté audio en el micrófono.")
+                        await websocket.send_text("No detecté audio.")
                         continue
-                    text = await transcribe(audio_bytes, "audio.wav")
-                    if not text:
+                    transcribed = await transcribe(audio_bytes, "audio.wav")
+                    if not transcribed:
                         await websocket.send_text("No entendí. Habla más fuerte.")
                         continue
-                    # Strip wake word from start of transcription
-                    import re
-                    text = re.sub(
-                        r'(?i)^[\s,.]*(jarvis|jarvi|harvis|harvi|jarbis|yarvis|yarbis|harvey|barral|barel|yarbiss|jarviz)[\s,.]*',
-                        '', text
-                    ).strip()
+                    text = _strip_wake_word(transcribed)
                     if not text:
-                        await websocket.send_text("No entendí el comando.")
+                        await websocket.send_text("¿Qué necesitás?")
                         continue
-                    log.info("PC mic transcribió: %s", text)
+                    log.info("PC mic: %s", text)
                 except Exception as e:
                     log.error("PC mic error: %s", e)
                     await websocket.send_text("__tablet_mic__")
                     continue
+            else:
+                text = msg
 
-            log.info("RECIBIDO: %s", text)
+            # Always-listening: strip wake word if present, process anyway
+            text = _strip_wake_word(text) if _has_wake_word(text) else text
+            if not text:
+                await websocket.send_text("¿Qué necesitás?")
+                continue
+
+            log.info("COMANDO: %s", text)
             try:
-                response = await asyncio.wait_for(process(text), timeout=25.0)
+                response = await asyncio.wait_for(process(text), timeout=30.0)
                 log.info("RESPUESTA: %s", response)
             except asyncio.TimeoutError:
                 response = "Tardé demasiado. Intenta de nuevo."
-                log.warning("TIMEOUT procesando: %s", text)
-            except _groq.RateLimitError as e:
-                response = "Límite de solicitudes. Intenta en unos minutos."
-                log.warning("Rate limit Groq: %s", e)
+                log.warning("TIMEOUT: %s", text)
             except Exception as e:
                 response = "Error interno. Intenta de nuevo."
-                log.error("ERROR en process(): %s", e, exc_info=True)
+                log.error("ERROR: %s", e, exc_info=True)
+
             if not response:
                 response = "Listo."
             try:
                 log_conversation(text, response)
             except Exception as e:
                 log.warning("No se pudo guardar conversación: %s", e)
+
             shape = _detect_shape(text)
-            # response may already be JSON (e.g. open_website with open_url)
             try:
                 payload = json.loads(response)
                 if not isinstance(payload, dict):
@@ -201,12 +261,14 @@ async def ws_endpoint(websocket: WebSocket):
                 payload = {"reply": response}
             if shape:
                 payload["shape"] = shape
+
             ws_payload = json.dumps(payload, ensure_ascii=False) if len(payload) > 1 else response
             await websocket.send_text(ws_payload)
             try:
                 speak(response)
             except Exception as e:
                 log.warning("TTS error: %s", e)
+
     except WebSocketDisconnect:
         log.info("Cliente desconectado: %s", websocket.client)
         clear_history()
