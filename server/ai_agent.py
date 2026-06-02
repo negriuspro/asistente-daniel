@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import logging
 import os
@@ -209,56 +209,61 @@ async def _run(tool: str, args: dict) -> str:
 
 # ─── Server / PC status helper ───────────────────────────────────────────────
 
-def _fmt_uptime(secs: int | None) -> str:
+def _fmt_uptime(secs):
     if not secs:
         return "?"
     d, r = divmod(int(secs), 86400)
     h, r = divmod(r, 3600)
     m    = r // 60
-    return f"{d}d {h}h {m}m" if d else (f"{h}h {m}m" if h else f"{m}m")
+    if d:
+        return str(d) + "d " + str(h) + "h " + str(m) + "m"
+    if h:
+        return str(h) + "h " + str(m) + "m"
+    return str(m) + "m"
 
 
-async def _get_server_status(target: str) -> str:
+async def _get_server_status(target):
     from .system_monitor import _main_pc_state, _is_online, _server_metrics
 
-    parts: list[str] = []
+    parts = []
 
     if target in ("pc", "both"):
         pc = _main_pc_state
         if pc:
-            online  = _is_online(pc)
-            bat     = pc.get("battery_percent")
-            plugged = pc.get("power_plugged")
-            bat_str = f"{bat:.0f}%" if bat is not None else "N/A"
-            plug_str = " ⚡cargando" if plugged else " 🔋descargando"
-            temp_str = f" | Temp {pc['temperature']}°C" if pc.get("temperature") else ""
+            online   = _is_online(pc)
+            bat      = pc.get("battery_percent")
+            plugged  = pc.get("power_plugged")
+            bat_str  = (str(round(bat)) + "%") if bat is not None else "N/A"
+            plug_str = " (cargando)" if plugged else " (descargando)"
+            tv = pc.get("temperature")
+            temp_str = (" | Temp " + str(tv) + "C") if tv else ""
+            estado   = "Online" if online else "Offline"
             parts.append(
-                f"🖥 PC Principal ({pc.get('hostname','?')}) — {'🟢 Online' if online else '🔴 Offline'}
-"
-                f"  CPU {pc.get('cpu_percent','?')}% | RAM {pc.get('ram_percent','?')}% | "
-                f"Disco {pc.get('disk_percent','?')}%{temp_str}
-"
-                f"  Batería {bat_str}{plug_str} | Uptime {_fmt_uptime(pc.get('uptime'))}"
+                "PC Principal (" + str(pc.get("hostname", "?")) + ") - " + estado + "\n"
+                + "  CPU " + str(pc.get("cpu_percent", "?")) + "% | "
+                + "RAM " + str(pc.get("ram_percent", "?")) + "% | "
+                + "Disco " + str(pc.get("disk_percent", "?")) + "%" + temp_str + "\n"
+                + "  Bateria " + bat_str + plug_str
+                + " | Uptime " + _fmt_uptime(pc.get("uptime"))
             )
         else:
-            parts.append("🖥 PC Principal: sin datos — agente no conectado.")
+            parts.append("PC Principal: sin datos - agente no conectado.")
 
     if target in ("server", "both"):
         sv = await asyncio.to_thread(_server_metrics)
-        temp_str = f" | Temp {sv['temperature']}°C" if sv.get("temperature") else ""
+        tv = sv.get("temperature")
+        temp_str = (" | Temp " + str(tv) + "C") if tv else ""
         parts.append(
-            f"🐧 Servidor ({sv.get('hostname','?')}) — 🟢 Online
-"
-            f"  CPU {sv['cpu_percent']}% | RAM {sv['ram_percent']}% | "
-            f"Disco {sv['disk_percent']}%{temp_str}
-"
-            f"  Docker {sv['docker_containers_running']} contenedores | "
-            f"IP {sv['ip_address']} | Uptime {_fmt_uptime(sv.get('uptime'))}"
+            "Servidor (" + str(sv.get("hostname", "?")) + ") - Online\n"
+            + "  CPU " + str(sv["cpu_percent"]) + "% | "
+            + "RAM " + str(sv["ram_percent"]) + "% | "
+            + "Disco " + str(sv["disk_percent"]) + "%" + temp_str + "\n"
+            + "  Docker " + str(sv["docker_containers_running"]) + " contenedores"
+            + " | IP " + str(sv["ip_address"])
+            + " | Uptime " + _fmt_uptime(sv.get("uptime"))
         )
 
-    return "
-
-".join(parts) if parts else "Sin datos de monitoreo disponibles."
+    return "\n\n".join(parts) if parts else "Sin datos de monitoreo disponibles."
 
 
 # ─── Main process ─────────────────────────────────────────────────────────────
