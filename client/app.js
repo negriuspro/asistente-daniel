@@ -785,6 +785,7 @@ function loadTab(tab) {
   if (tab === 'battery') loadBattery();
   if (tab === 'system')  loadSystem();
   if (tab === 'hist')    renderHistory();
+  if (tab === 'monitor') loadMonitor();
 }
 
 const DEV_ICONS = { bombillo: '💡', aire: '❄️', control: '🎛️', enchufe: '🔌' };
@@ -856,6 +857,82 @@ function setBar(name, pct, label) {
   fill.style.width      = `${Math.min(pct, 100)}%`;
   fill.style.background = pct > 85 ? '#ff3355' : pct > 65 ? '#ffaa00' : 'var(--cyan)';
   fill.style.boxShadow  = pct > 85 ? '0 0 6px rgba(255,51,85,0.5)' : pct > 65 ? '0 0 6px rgba(255,170,0,0.4)' : '0 0 6px rgba(0,212,255,0.4)';
+}
+
+
+/* ── System Monitor ─────────────────────────────────────── */
+function _fmtUptime(secs) {
+  if (!secs && secs !== 0) return '--';
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor((secs % 86400) / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  return d > 0 ? `${d}d ${h}h ${m}m` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function _fmtTs(iso) {
+  if (!iso) return '--';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch { return '--'; }
+}
+
+function _setMonBar(prefix, id, pct, label) {
+  const fill = document.getElementById(`mon-${prefix}-${id}-bar`);
+  const val  = document.getElementById(`mon-${prefix}-${id}-v`);
+  if (!fill || !val) return;
+  val.textContent  = label;
+  fill.style.width = `${Math.min(pct || 0, 100)}%`;
+  const color = (pct > 85) ? '#ff3355' : (pct > 65) ? '#ffaa00' : 'var(--cyan)';
+  fill.style.background = color;
+  fill.style.boxShadow  = (pct > 85) ? '0 0 6px rgba(255,51,85,0.5)' : (pct > 65) ? '0 0 6px rgba(255,170,0,0.4)' : '0 0 6px rgba(0,212,255,0.4)';
+}
+
+function _setText(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text ?? '--';
+}
+
+async function loadMonitor() {
+  try {
+    const res  = await fetch('/api/system/status');
+    const data = await res.json();
+    const pc   = data.main_pc  || {};
+    const sv   = data.server   || {};
+
+    // ── PC Principal ─────────────────────────────
+    _setText('mon-pc-hostname', pc.hostname || 'Computadora Principal');
+
+    const onlineBadge = document.getElementById('mon-pc-online');
+    if (onlineBadge) {
+      onlineBadge.textContent = pc.online ? 'ONLINE' : 'OFFLINE';
+      onlineBadge.className   = `mon-badge ${pc.online ? 'mon-online' : 'mon-offline'}`;
+    }
+
+    _setMonBar('pc', 'cpu',  pc.cpu_percent,  `${pc.cpu_percent ?? '--'}%`);
+    _setMonBar('pc', 'ram',  pc.ram_percent,  `${pc.ram_percent ?? '--'}%`);
+    _setMonBar('pc', 'disk', pc.disk_percent, `${pc.disk_percent ?? '--'}%`);
+
+    const bat = pc.battery_percent;
+    _setMonBar('pc', 'bat', bat, bat != null ? `${bat}%` : 'N/A');
+
+    _setText('mon-pc-plugged', pc.power_plugged != null ? (pc.power_plugged ? '⚡ Conectado' : 'Desconectado') : '--');
+    _setText('mon-pc-temp',   pc.temperature   != null ? `${pc.temperature}°C` : 'N/A');
+    _setText('mon-pc-uptime', _fmtUptime(pc.uptime));
+    _setText('mon-pc-ts',     _fmtTs(pc.timestamp));
+
+    // ── Servidor ──────────────────────────────────
+    _setText('mon-sv-hostname', sv.hostname || 'angel-HP-Notebook');
+    _setMonBar('sv', 'cpu',  sv.cpu_percent,  `${sv.cpu_percent ?? '--'}%`);
+    _setMonBar('sv', 'ram',  sv.ram_percent,  `${sv.ram_percent ?? '--'}%`);
+    _setMonBar('sv', 'disk', sv.disk_percent, `${sv.disk_percent ?? '--'}%`);
+
+    _setText('mon-sv-temp',   sv.temperature   != null ? `${sv.temperature}°C` : 'N/A');
+    _setText('mon-sv-docker', sv.docker_containers_running ?? '--');
+    _setText('mon-sv-ip',     sv.ip_address    || '--');
+    _setText('mon-sv-uptime', _fmtUptime(sv.uptime));
+
+  } catch { /* silent — panel puede estar cerrado */ }
 }
 
 function sendQuick(cmd) {

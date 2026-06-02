@@ -16,6 +16,7 @@ from .ai_agent import clear_history, process
 from .battery_monitor import monitor as _bm_monitor
 from .conversation_log import get_history, log_conversation
 from .docker_control import router as docker_router
+from .system_monitor import router as system_monitor_router
 from .smarthome import control_device, get_device_status, list_devices
 from .stt import transcribe
 from .tts import speak
@@ -31,6 +32,7 @@ CLIENT_DIR = Path(__file__).parent.parent / "client"
 
 app = FastAPI(title="Daniel AI Assistant")
 app.include_router(docker_router)
+app.include_router(system_monitor_router)
 
 
 class _CtrlBody(BaseModel):

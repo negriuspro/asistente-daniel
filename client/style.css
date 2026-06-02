@@ -754,3 +754,38 @@ body::after {
   .mic-btn   { bottom: 90px; width: 48px; height: 48px; }
   .cmd-row   { bottom: 54px; }
 }
+
+/* ── System Monitor ──────────────────────────────────────── */
+.mon-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 6px 0 10px;
+}
+
+.mon-hostname {
+  font-size: 11px;
+  color: var(--cyan);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mon-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+
+.mon-online {
+  background: rgba(0, 255, 140, 0.15);
+  color: #00ff8c;
+  border: 1px solid rgba(0, 255, 140, 0.35);
+}
+
+.mon-offline {
+  background: rgba(255, 51, 85, 0.15);
+  color: #ff3355;
+  border: 1px solid rgba(255, 51, 85, 0.35);
+}

@@ -46,6 +46,7 @@
       <button class="cptab"        data-tab="system"  onclick="switchTab('system')">💻<br><small>SISTEMA</small></button>
       <button class="cptab"        data-tab="quick"   onclick="switchTab('quick')">⚡<br><small>RÁPIDOS</small></button>
       <button class="cptab"        data-tab="hist"    onclick="switchTab('hist')">📋<br><small>LOG</small></button>
+      <button class="cptab"        data-tab="monitor" onclick="switchTab('monitor')">🖥<br><small>MONITOR</small></button>
     </nav>
 
     <div class="cp-body">
@@ -134,6 +135,68 @@
           <button class="qbtn qbtn-off" onclick="sendQuick('apaga el aire acondicionado')">🌡️ AC OFF</button>
           <button class="qbtn qbtn-on"  onclick="sendQuick('enciende el enchufe pc')">🔌 Enchufe ON</button>
           <button class="qbtn qbtn-off" onclick="sendQuick('apaga el enchufe pc')">⭕ Enchufe OFF</button>
+        </div>
+      </div>
+
+
+      <!-- System Monitoring -->
+      <div id="cptab-monitor" class="cptab-pane">
+        <!-- Computadora Principal -->
+        <p class="cp-section-label">◈ COMPUTADORA PRINCIPAL</p>
+        <div class="mon-status-row">
+          <span id="mon-pc-hostname" class="mon-hostname">--</span>
+          <span id="mon-pc-online" class="mon-badge mon-offline">OFFLINE</span>
+        </div>
+        <div class="sys-bars" id="mon-pc-bars">
+          <div class="sys-item">
+            <div class="sys-lbl"><span>CPU</span><span id="mon-pc-cpu-v">--%</span></div>
+            <div class="sys-track"><div class="sys-fill" id="mon-pc-cpu-bar"></div></div>
+          </div>
+          <div class="sys-item">
+            <div class="sys-lbl"><span>RAM</span><span id="mon-pc-ram-v">--%</span></div>
+            <div class="sys-track"><div class="sys-fill" id="mon-pc-ram-bar"></div></div>
+          </div>
+          <div class="sys-item">
+            <div class="sys-lbl"><span>DISCO</span><span id="mon-pc-disk-v">--%</span></div>
+            <div class="sys-track"><div class="sys-fill" id="mon-pc-disk-bar"></div></div>
+          </div>
+          <div class="sys-item">
+            <div class="sys-lbl"><span>BATERÍA</span><span id="mon-pc-bat-v">--%</span></div>
+            <div class="sys-track"><div class="sys-fill" id="mon-pc-bat-bar"></div></div>
+          </div>
+        </div>
+        <div class="bat-rows" style="margin-top:8px">
+          <div class="bat-row"><span>Enchufe</span>      <span id="mon-pc-plugged"  class="badge-d">--</span></div>
+          <div class="bat-row"><span>Temperatura</span>  <span id="mon-pc-temp"     class="badge-d">--</span></div>
+          <div class="bat-row"><span>Uptime</span>       <span id="mon-pc-uptime"   class="badge-d">--</span></div>
+          <div class="bat-row"><span>Última update</span><span id="mon-pc-ts"       class="badge-d">--</span></div>
+        </div>
+
+        <!-- Servidor Ubuntu -->
+        <p class="cp-section-label" style="margin-top:18px">◈ SERVIDOR UBUNTU</p>
+        <div class="mon-status-row">
+          <span id="mon-sv-hostname" class="mon-hostname">servidor</span>
+          <span class="mon-badge mon-online">ONLINE</span>
+        </div>
+        <div class="sys-bars">
+          <div class="sys-item">
+            <div class="sys-lbl"><span>CPU</span><span id="mon-sv-cpu-v">--%</span></div>
+            <div class="sys-track"><div class="sys-fill" id="mon-sv-cpu-bar"></div></div>
+          </div>
+          <div class="sys-item">
+            <div class="sys-lbl"><span>RAM</span><span id="mon-sv-ram-v">--%</span></div>
+            <div class="sys-track"><div class="sys-fill" id="mon-sv-ram-bar"></div></div>
+          </div>
+          <div class="sys-item">
+            <div class="sys-lbl"><span>DISCO</span><span id="mon-sv-disk-v">--%</span></div>
+            <div class="sys-track"><div class="sys-fill" id="mon-sv-disk-bar"></div></div>
+          </div>
+        </div>
+        <div class="bat-rows" style="margin-top:8px">
+          <div class="bat-row"><span>Temperatura</span>  <span id="mon-sv-temp"    class="badge-d">--</span></div>
+          <div class="bat-row"><span>Docker activos</span><span id="mon-sv-docker" class="badge-d">--</span></div>
+          <div class="bat-row"><span>IP</span>           <span id="mon-sv-ip"      class="badge-d">--</span></div>
+          <div class="bat-row"><span>Uptime</span>       <span id="mon-sv-uptime"  class="badge-d">--</span></div>
         </div>
       </div>
 
