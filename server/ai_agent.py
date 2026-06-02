@@ -66,7 +66,8 @@ ACCIONES DISPONIBLES:
 - reminder: {"message": "qué recordar", "time": "17:00 o 5pm", "date": "today"}
 - screen_vision: {"question": "pregunta sobre la pantalla"}
 - get_datetime: {}
-- system_info: {} — CPU, RAM, disco, batería
+- system_info: {} — CPU, RAM, disco, batería del servidor
+- server_status: {"target": "server/pc/both"} — estado real del servidor Ubuntu y/o PC principal (CPU, RAM, disco, batería, docker, temperatura)
 - chat: {} — solo para conversación sin acción
 
 YouTube: l=+10s, j=-10s, k=pausa, f=pantalla completa, m=mute.
@@ -89,6 +90,11 @@ EJEMPLOS:
 "recomiéndame una película de terror" → {"reply": "", "actions": [{"action": "movies_info", "params": {"query": "terror", "type": "movie"}}]}
 "qué hay de trending en series" → {"reply": "", "actions": [{"action": "movies_info", "params": {"query": "trending", "type": "tv"}}]}
 "información del sistema" → {"reply": "", "actions": [{"action": "system_info", "params": {}}]}
+"cómo está el servidor" → {"reply": "", "actions": [{"action": "server_status", "params": {"target": "server"}}]}
+"cómo está la pc principal" → {"reply": "", "actions": [{"action": "server_status", "params": {"target": "pc"}}]}
+"cómo están los sistemas" → {"reply": "", "actions": [{"action": "server_status", "params": {"target": "both"}}]}
+"cuánta batería tiene la pc" → {"reply": "", "actions": [{"action": "server_status", "params": {"target": "pc"}}]}
+"cuántos contenedores están corriendo" → {"reply": "", "actions": [{"action": "server_status", "params": {"target": "server"}}]}
 "cuánta RAM tengo" → {"reply": "", "actions": [{"action": "system_info", "params": {}}]}
 "busca el precio del iPhone" → {"reply": "Buscando.", "actions": [{"action": "web_search", "params": {"query": "precio iPhone 16 2025"}}]}
 "recuerda que me llamo Juan" → {"reply": "Anotado.", "actions": [{"action": "remember", "params": {"key": "nombre", "value": "Juan", "category": "identity"}}]}
@@ -198,6 +204,61 @@ async def _llm(system: str, history: list[dict], user_msg: str) -> str:
 
 async def _run(tool: str, args: dict) -> str:
     return await asyncio.to_thread(execute_tool, tool, args)
+
+
+
+# ─── Server / PC status helper ───────────────────────────────────────────────
+
+def _fmt_uptime(secs: int | None) -> str:
+    if not secs:
+        return "?"
+    d, r = divmod(int(secs), 86400)
+    h, r = divmod(r, 3600)
+    m    = r // 60
+    return f"{d}d {h}h {m}m" if d else (f"{h}h {m}m" if h else f"{m}m")
+
+
+async def _get_server_status(target: str) -> str:
+    from .system_monitor import _main_pc_state, _is_online, _server_metrics
+
+    parts: list[str] = []
+
+    if target in ("pc", "both"):
+        pc = _main_pc_state
+        if pc:
+            online  = _is_online(pc)
+            bat     = pc.get("battery_percent")
+            plugged = pc.get("power_plugged")
+            bat_str = f"{bat:.0f}%" if bat is not None else "N/A"
+            plug_str = " ⚡cargando" if plugged else " 🔋descargando"
+            temp_str = f" | Temp {pc['temperature']}°C" if pc.get("temperature") else ""
+            parts.append(
+                f"🖥 PC Principal ({pc.get('hostname','?')}) — {'🟢 Online' if online else '🔴 Offline'}
+"
+                f"  CPU {pc.get('cpu_percent','?')}% | RAM {pc.get('ram_percent','?')}% | "
+                f"Disco {pc.get('disk_percent','?')}%{temp_str}
+"
+                f"  Batería {bat_str}{plug_str} | Uptime {_fmt_uptime(pc.get('uptime'))}"
+            )
+        else:
+            parts.append("🖥 PC Principal: sin datos — agente no conectado.")
+
+    if target in ("server", "both"):
+        sv = await asyncio.to_thread(_server_metrics)
+        temp_str = f" | Temp {sv['temperature']}°C" if sv.get("temperature") else ""
+        parts.append(
+            f"🐧 Servidor ({sv.get('hostname','?')}) — 🟢 Online
+"
+            f"  CPU {sv['cpu_percent']}% | RAM {sv['ram_percent']}% | "
+            f"Disco {sv['disk_percent']}%{temp_str}
+"
+            f"  Docker {sv['docker_containers_running']} contenedores | "
+            f"IP {sv['ip_address']} | Uptime {_fmt_uptime(sv.get('uptime'))}"
+        )
+
+    return "
+
+".join(parts) if parts else "Sin datos de monitoreo disponibles."
 
 
 # ─── Main process ─────────────────────────────────────────────────────────────
@@ -346,6 +407,9 @@ async def process(text: str) -> str:
         elif action == "get_weather":
             from .weather import get_weather
             return await get_weather(params.get("location", ""))
+
+        elif action == "server_status":
+            return await _get_server_status(params.get("target", "both"))
 
         elif action == "movies_info":
             from .tmdb_client import search_content
