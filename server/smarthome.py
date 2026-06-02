@@ -7,7 +7,10 @@ import tinytuya
 
 log = logging.getLogger("daniel.smarthome")
 
-_DEVICES_JSON = Path(__file__).parent.parent / "devices.json"
+_DEVICES_JSON = Path(os.environ.get("DATA_DIR", "/app/data")) / "devices.json"
+# Fallback a la raíz del proyecto (desarrollo local)
+if not _DEVICES_JSON.exists():
+    _DEVICES_JSON = Path(__file__).parent.parent / "devices.json"
 _devices_cache: list[dict] | None = None
 _cloud = None
 
