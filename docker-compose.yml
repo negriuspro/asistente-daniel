@@ -103,7 +103,8 @@ services:
     volumes:
       - daniel-data:/app/data
     networks:
-      - daniel-private
+      - daniel-private   # acceso a Redis + socket-proxy
+      - daniel-egress    # salida a internet para AI APIs (Gemini, Groq, etc.)
     depends_on:
       redis:
         condition: service_healthy
@@ -164,7 +165,8 @@ services:
       BACKUP_INTERVAL_SECONDS: "21600"
       BACKUP_KEEP_DAYS: "7"
     volumes:
-      - redis-data:/data:ro
+      - redis-data:/data:ro          # Redis RDB → backup
+      - daniel-data:/app-data:ro     # Conversaciones JSONL → backup (R-04)
       - ./backups:/backups
     networks:
       - daniel-private
@@ -179,6 +181,9 @@ networks:
     driver: bridge
   daniel-private:
     driver: bridge
+    internal: true  # Redis, socket-proxy y backup aislados de internet
+  daniel-egress:
+    driver: bridge  # Solo el backend — para llamar AI APIs externas
 
 volumes:
   redis-data:
