@@ -6,7 +6,15 @@ import tempfile
 from pathlib import Path
 
 import psutil
-from fastapi import FastAPI, File, Form, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    Query,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -17,6 +25,7 @@ from .battery_monitor import monitor as _bm_monitor
 from .conversation_log import get_history, log_conversation
 from .docker_control import router as docker_router
 from .system_monitor import router as system_monitor_router
+from .smart_devices.router import router as smart_devices_router
 from .smarthome import control_device, get_device_status, list_devices
 from .stt import transcribe
 from .tts import speak
@@ -33,6 +42,7 @@ CLIENT_DIR = Path(__file__).parent.parent / "client"
 app = FastAPI(title="Daniel AI Assistant")
 app.include_router(docker_router)
 app.include_router(system_monitor_router)
+app.include_router(smart_devices_router)
 
 
 class _CtrlBody(BaseModel):
@@ -41,7 +51,7 @@ class _CtrlBody(BaseModel):
 
 # ─── Wake-word pattern (responds to "Daniel" and common mishearings) ──────────
 _WAKE_RE = re.compile(
-    r'(?i)^[\s,.]*(daniel|danial|danie|danielle|danil|daniyel|danieel|daniele|dani)[\s,.]*',
+    r"(?i)^[\s,.]*(daniel|danial|danie|danielle|danil|daniyel|danieel|daniele|dani)[\s,.]*",
 )
 
 
@@ -56,13 +66,25 @@ def _has_wake_word(text: str) -> bool:
 # ─── Shape detection ──────────────────────────────────────────────────────────
 
 _SHAPE_MAP = {
-    'galaxia': 'galaxy', 'galaxy': 'galaxy',
-    'cerebro': 'brain',  'brain': 'brain',  'mente': 'brain',
-    'música':  'wave',   'musica': 'wave',   'onda': 'wave',   'wave': 'wave',
-    'adn':     'dna',    'dna': 'dna',       'espiral': 'dna',
-    'anillo':  'ring',   'ring': 'ring',
-    'estrella':'star',   'star': 'star',
-    'árbol':   'tree',   'arbol': 'tree',    'tree': 'tree',
+    "galaxia": "galaxy",
+    "galaxy": "galaxy",
+    "cerebro": "brain",
+    "brain": "brain",
+    "mente": "brain",
+    "música": "wave",
+    "musica": "wave",
+    "onda": "wave",
+    "wave": "wave",
+    "adn": "dna",
+    "dna": "dna",
+    "espiral": "dna",
+    "anillo": "ring",
+    "ring": "ring",
+    "estrella": "star",
+    "star": "star",
+    "árbol": "tree",
+    "arbol": "tree",
+    "tree": "tree",
 }
 
 
@@ -76,6 +98,7 @@ def _detect_shape(text: str):
 
 # ─── Startup ──────────────────────────────────────────────────────────────────
 
+
 @app.on_event("startup")
 async def startup() -> None:
     psutil.cpu_percent()
@@ -84,6 +107,7 @@ async def startup() -> None:
 
 # ─── Health ───────────────────────────────────────────────────────────────────
 
+
 @app.get("/health")
 async def health():
     return JSONResponse({"status": "ok", "assistant": "Daniel"})
@@ -91,18 +115,21 @@ async def health():
 
 # ─── REST API ─────────────────────────────────────────────────────────────────
 
+
 @app.get("/api/devices")
 async def api_devices():
     devs = list_devices()
     out = []
     for d in devs:
-        out.append({
-            "id":      d["id"],
-            "name":    d.get("name", "?"),
-            "online":  d.get("online", False),
-            "switch":  get_device_status(d["id"]),
-            "product": d.get("product_name", ""),
-        })
+        out.append(
+            {
+                "id": d["id"],
+                "name": d.get("name", "?"),
+                "online": d.get("online", False),
+                "switch": get_device_status(d["id"]),
+                "product": d.get("product_name", ""),
+            }
+        )
     return JSONResponse({"devices": out})
 
 
@@ -122,14 +149,16 @@ async def api_battery():
     batt = psutil.sensors_battery()
     if batt is None:
         return JSONResponse({"available": False})
-    return JSONResponse({
-        "available": True,
-        "percent":   round(batt.percent, 1),
-        "plugged":   batt.power_plugged,
-        "auto":      bm._plug_on,
-        "low":       bm._LOW,
-        "high":      bm._HIGH,
-    })
+    return JSONResponse(
+        {
+            "available": True,
+            "percent": round(batt.percent, 1),
+            "plugged": batt.power_plugged,
+            "auto": bm._plug_on,
+            "low": bm._LOW,
+            "high": bm._HIGH,
+        }
+    )
 
 
 @app.get("/api/system")
@@ -140,20 +169,23 @@ async def api_system():
     except Exception:
         disk = 0
     batt = psutil.sensors_battery()
-    return JSONResponse({
-        "cpu":       round(psutil.cpu_percent(interval=None), 1),
-        "ram":       round(mem.percent, 1),
-        "ram_used":  round(mem.used  / 1024 ** 3, 1),
-        "ram_total": round(mem.total / 1024 ** 3, 1),
-        "disk":      round(disk, 1),
-        "battery":   round(batt.percent, 1) if batt else None,
-        "plugged":   batt.power_plugged if batt else None,
-    })
+    return JSONResponse(
+        {
+            "cpu": round(psutil.cpu_percent(interval=None), 1),
+            "ram": round(mem.percent, 1),
+            "ram_used": round(mem.used / 1024**3, 1),
+            "ram_total": round(mem.total / 1024**3, 1),
+            "disk": round(disk, 1),
+            "battery": round(batt.percent, 1) if batt else None,
+            "plugged": batt.power_plugged if batt else None,
+        }
+    )
 
 
 @app.get("/api/weather")
 async def api_weather(location: str = Query(default="")):
     from .weather import get_weather
+
     result = await get_weather(location)
     return JSONResponse({"result": result})
 
@@ -161,6 +193,7 @@ async def api_weather(location: str = Query(default="")):
 @app.get("/api/movies")
 async def api_movies(query: str = Query(...), type: str = Query(default="movie")):
     from .tmdb_client import search_content
+
     result = await asyncio.to_thread(search_content, query, type)
     return JSONResponse({"result": result})
 
@@ -171,6 +204,7 @@ async def api_process_file(
     instruction: str = Form(default=""),
 ):
     from .file_processor import process_file
+
     suffix = Path(file.filename or "file").suffix or ".bin"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(await file.read())
@@ -187,6 +221,7 @@ async def api_process_file(
 
 # ─── Transcribe endpoint ─────────────────────────────────────────────────────
 
+
 @app.post("/transcribe")
 async def transcribe_endpoint(audio: UploadFile):
     data = await audio.read()
@@ -195,6 +230,7 @@ async def transcribe_endpoint(audio: UploadFile):
 
 
 # ─── WebSocket — always-listening mode ───────────────────────────────────────
+
 
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
@@ -210,6 +246,7 @@ async def ws_endpoint(websocket: WebSocket):
                 log.info("Wake word recibido — grabando desde micrófono del PC...")
                 try:
                     from .mic import record_command
+
                     audio_bytes = await record_command()
                     if not audio_bytes:
                         await websocket.send_text("No detecté audio.")
@@ -264,7 +301,11 @@ async def ws_endpoint(websocket: WebSocket):
             if shape:
                 payload["shape"] = shape
 
-            ws_payload = json.dumps(payload, ensure_ascii=False) if len(payload) > 1 else response
+            ws_payload = (
+                json.dumps(payload, ensure_ascii=False)
+                if len(payload) > 1
+                else response
+            )
             await websocket.send_text(ws_payload)
             try:
                 speak(response)

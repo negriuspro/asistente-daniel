@@ -2,8 +2,10 @@ import asyncio
 import json
 import logging
 import os
+import time
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
 
 from .tools import execute_tool
@@ -68,6 +70,7 @@ ACCIONES DISPONIBLES:
 - get_datetime: {}
 - system_info: {} — CPU, RAM, disco, batería del servidor
 - server_status: {"target": "server/pc/both"} — estado real del servidor Ubuntu y/o PC principal (CPU, RAM, disco, batería, docker, temperatura)
+- scan_network: {"subnet": ""} — escanea la red local y lista todos los dispositivos encontrados con su tipo, IP, fabricante y puertos abiertos. Dejar subnet vacío para auto-detectar.
 - chat: {} — solo para conversación sin acción
 
 YouTube: l=+10s, j=-10s, k=pausa, f=pantalla completa, m=mute.
@@ -93,6 +96,9 @@ EJEMPLOS:
 "cómo está el servidor" → {"reply": "", "actions": [{"action": "server_status", "params": {"target": "server"}}]}
 "cómo está la pc principal" → {"reply": "", "actions": [{"action": "server_status", "params": {"target": "pc"}}]}
 "cómo están los sistemas" → {"reply": "", "actions": [{"action": "server_status", "params": {"target": "both"}}]}
+"analiza la red" → {"reply": "Escaneando.", "actions": [{"action": "scan_network", "params": {"subnet": ""}}]}
+"qué dispositivos hay en la red" → {"reply": "Escaneando.", "actions": [{"action": "scan_network", "params": {"subnet": ""}}]}
+"escanea la red" → {"reply": "Escaneando.", "actions": [{"action": "scan_network", "params": {"subnet": ""}}]}
 "cuánta batería tiene la pc" → {"reply": "", "actions": [{"action": "server_status", "params": {"target": "pc"}}]}
 "cuántos contenedores están corriendo" → {"reply": "", "actions": [{"action": "server_status", "params": {"target": "server"}}]}
 "cuánta RAM tengo" → {"reply": "", "actions": [{"action": "system_info", "params": {}}]}
@@ -111,6 +117,7 @@ REGLA FINAL: Solo JSON. Sin texto antes ni después. Reply máximo 6 palabras.""
 
 # ─── JSON extractor ───────────────────────────────────────────────────────────
 
+
 def _first_json(text: str) -> dict | None:
     start = text.find("{")
     if start == -1:
@@ -123,98 +130,192 @@ def _first_json(text: str) -> dict | None:
             depth -= 1
             if depth == 0:
                 try:
-                    return json.loads(text[start: i + 1])
+                    return json.loads(text[start : i + 1])
                 except json.JSONDecodeError:
                     return None
     return None
 
 
-# ─── LLM calls ───────────────────────────────────────────────────────────────
+# ─── Multi-provider LLM router ───────────────────────────────────────────────
+# Orden: más rápido primero. Salta al siguiente si falla (cooldown 60s).
 
-async def _call_gemini(system: str, history: list[dict], user_msg: str) -> str:
-    """Gemini 2.0 Flash — primary LLM."""
-    import google.generativeai as genai
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY no configurada")
+_PROVIDERS = [
+    {
+        "name": "cerebras",
+        "env": "CEREBRAS_API_KEY",
+        "type": "openai_compat",
+        "base_url": "https://api.cerebras.ai/v1",
+        "model": "llama-3.3-70b",
+    },
+    {
+        "name": "groq",
+        "env": "GROQ_API_KEY",
+        "type": "groq",
+        "models": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-8b-8192"],
+    },
+    {
+        "name": "sambanova",
+        "env": "SAMBANOVA_API_KEY",
+        "type": "openai_compat",
+        "base_url": "https://api.sambanova.ai/v1",
+        "model": "Meta-Llama-3.3-70B-Instruct",
+    },
+    {
+        "name": "gemini",
+        "env": "GEMINI_API_KEY",
+        "type": "gemini",
+        "model": "gemini-2.0-flash",
+    },
+    {
+        "name": "openrouter",
+        "env": "OPENROUTER_API_KEY",
+        "type": "openai_compat",
+        "base_url": "https://openrouter.ai/api/v1",
+        "model": "meta-llama/llama-3.3-70b-instruct:free",
+    },
+]
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash",
-        system_instruction=system,
-        generation_config=genai.types.GenerationConfig(
-            temperature=0.1,
-            max_output_tokens=512,
-        ),
-    )
-
-    # Build Gemini-format history (must be alternating user/model pairs)
-    gemini_history = []
-    for msg in history:
-        role = "model" if msg["role"] == "assistant" else "user"
-        gemini_history.append({"role": role, "parts": [msg["content"]]})
-
-    def _sync() -> str:
-        chat = model.start_chat(history=gemini_history)
-        resp = chat.send_message(user_msg)
-        return resp.text
-
-    return await asyncio.to_thread(_sync)
+_failed: dict[str, float] = {}
+_last_ok: str | None = None
+_COOLDOWN = 60.0
 
 
-async def _call_groq(system: str, messages: list[dict]) -> str:
-    """Groq Llama — fallback LLM."""
+async def _call_openai_compat(
+    base_url: str, api_key: str, model: str, system: str, messages: list[dict]
+) -> str:
+    payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": system}] + messages,
+        "max_tokens": 512,
+        "temperature": 0.1,
+    }
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            f"{base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"] or ""
+
+
+async def _call_groq_provider(
+    api_key: str, models: list[str], system: str, messages: list[dict]
+) -> str:
     from groq import AsyncGroq, RateLimitError
-    api_key = os.environ.get("GROQ_API_KEY", "")
-    if not api_key:
-        raise ValueError("GROQ_API_KEY no configurada")
 
     client = AsyncGroq(api_key=api_key)
-    models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-8b-8192"]
-    full_messages = [{"role": "system", "content": system}] + messages
-
+    full = [{"role": "system", "content": system}] + messages
     for model in models:
         try:
             resp = await client.chat.completions.create(
                 model=model,
-                messages=full_messages,
+                messages=full,
                 max_tokens=512,
                 temperature=0.1,
             )
             return resp.choices[0].message.content or ""
         except RateLimitError:
-            log.warning("Rate limit en %s — probando siguiente modelo", model)
+            log.warning("Groq rate limit en %s", model)
     raise RuntimeError("Todos los modelos Groq agotaron su límite.")
 
 
-async def _llm(system: str, history: list[dict], user_msg: str) -> str:
-    """Try Gemini first, fall back to Groq."""
-    gemini_key = os.environ.get("GEMINI_API_KEY", "")
-    if gemini_key:
-        try:
-            return await _call_gemini(system, history, user_msg)
-        except Exception as e:
-            log.warning("Gemini falló (%s) — usando Groq como respaldo", e)
+async def _call_gemini_provider(
+    api_key: str, model: str, system: str, history: list[dict], user_msg: str
+) -> str:
+    import google.generativeai as genai
 
-    groq_messages = history + [{"role": "user", "content": user_msg}]
-    return await _call_groq(system, groq_messages)
+    genai.configure(api_key=api_key)
+    m = genai.GenerativeModel(
+        model_name=model,
+        system_instruction=system,
+        generation_config=genai.types.GenerationConfig(
+            temperature=0.1, max_output_tokens=512
+        ),
+    )
+    gemini_hist = [
+        {
+            "role": "model" if msg["role"] == "assistant" else "user",
+            "parts": [msg["content"]],
+        }
+        for msg in history
+    ]
+
+    def _sync() -> str:
+        chat = m.start_chat(history=gemini_hist)
+        return chat.send_message(user_msg).text
+
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(_sync), timeout=8.0)
+    except asyncio.TimeoutError:
+        raise RuntimeError("Gemini timeout — cuota agotada o red lenta")
+
+
+async def _llm(system: str, history: list[dict], user_msg: str) -> str:
+    global _last_ok
+    now = time.time()
+    messages = history + [{"role": "user", "content": user_msg}]
+
+    available = [p for p in _PROVIDERS if os.environ.get(p["env"], "")]
+    ordered = [p for p in available if p["name"] == _last_ok] + [
+        p
+        for p in available
+        if p["name"] != _last_ok and now - _failed.get(p["name"], 0) > _COOLDOWN
+    ]
+
+    if not ordered:
+        raise RuntimeError("Ningún proveedor LLM configurado.")
+
+    for provider in ordered:
+        name = provider["name"]
+        key = os.environ.get(provider["env"], "")
+        try:
+            if provider["type"] == "openai_compat":
+                result = await _call_openai_compat(
+                    provider["base_url"], key, provider["model"], system, messages
+                )
+            elif provider["type"] == "groq":
+                result = await _call_groq_provider(
+                    key, provider["models"], system, messages
+                )
+            else:
+                result = await _call_gemini_provider(
+                    key, provider["model"], system, history, user_msg
+                )
+
+            if _last_ok != name:
+                log.info("LLM activo: %s", name)
+            _last_ok = name
+            return result
+
+        except Exception as e:
+            _failed[name] = now
+            log.warning(
+                "Provider %s falló (%s) — probando siguiente", name, type(e).__name__
+            )
+
+    raise RuntimeError("Todos los proveedores LLM fallaron.")
 
 
 # ─── Tool runner ─────────────────────────────────────────────────────────────
+
 
 async def _run(tool: str, args: dict) -> str:
     return await asyncio.to_thread(execute_tool, tool, args)
 
 
-
 # ─── Server / PC status helper ───────────────────────────────────────────────
+
 
 def _fmt_uptime(secs):
     if not secs:
         return "?"
     d, r = divmod(int(secs), 86400)
     h, r = divmod(r, 3600)
-    m    = r // 60
+    m = r // 60
     if d:
         return str(d) + "d " + str(h) + "h " + str(m) + "m"
     if h:
@@ -230,21 +331,36 @@ async def _get_server_status(target):
     if target in ("pc", "both"):
         pc = _main_pc_state
         if pc:
-            online   = _is_online(pc)
-            bat      = pc.get("battery_percent")
-            plugged  = pc.get("power_plugged")
-            bat_str  = (str(round(bat)) + "%") if bat is not None else "N/A"
+            online = _is_online(pc)
+            bat = pc.get("battery_percent")
+            plugged = pc.get("power_plugged")
+            bat_str = (str(round(bat)) + "%") if bat is not None else "N/A"
             plug_str = " (cargando)" if plugged else " (descargando)"
             tv = pc.get("temperature")
             temp_str = (" | Temp " + str(tv) + "C") if tv else ""
-            estado   = "Online" if online else "Offline"
+            estado = "Online" if online else "Offline"
             parts.append(
-                "PC Principal (" + str(pc.get("hostname", "?")) + ") - " + estado + "\n"
-                + "  CPU " + str(pc.get("cpu_percent", "?")) + "% | "
-                + "RAM " + str(pc.get("ram_percent", "?")) + "% | "
-                + "Disco " + str(pc.get("disk_percent", "?")) + "%" + temp_str + "\n"
-                + "  Bateria " + bat_str + plug_str
-                + " | Uptime " + _fmt_uptime(pc.get("uptime"))
+                "PC Principal ("
+                + str(pc.get("hostname", "?"))
+                + ") - "
+                + estado
+                + "\n"
+                + "  CPU "
+                + str(pc.get("cpu_percent", "?"))
+                + "% | "
+                + "RAM "
+                + str(pc.get("ram_percent", "?"))
+                + "% | "
+                + "Disco "
+                + str(pc.get("disk_percent", "?"))
+                + "%"
+                + temp_str
+                + "\n"
+                + "  Bateria "
+                + bat_str
+                + plug_str
+                + " | Uptime "
+                + _fmt_uptime(pc.get("uptime"))
             )
         else:
             parts.append("PC Principal: sin datos - agente no conectado.")
@@ -254,19 +370,90 @@ async def _get_server_status(target):
         tv = sv.get("temperature")
         temp_str = (" | Temp " + str(tv) + "C") if tv else ""
         parts.append(
-            "Servidor (" + str(sv.get("hostname", "?")) + ") - Online\n"
-            + "  CPU " + str(sv["cpu_percent"]) + "% | "
-            + "RAM " + str(sv["ram_percent"]) + "% | "
-            + "Disco " + str(sv["disk_percent"]) + "%" + temp_str + "\n"
-            + "  Docker " + str(sv["docker_containers_running"]) + " contenedores"
-            + " | IP " + str(sv["ip_address"])
-            + " | Uptime " + _fmt_uptime(sv.get("uptime"))
+            "Servidor ("
+            + str(sv.get("hostname", "?"))
+            + ") - Online\n"
+            + "  CPU "
+            + str(sv["cpu_percent"])
+            + "% | "
+            + "RAM "
+            + str(sv["ram_percent"])
+            + "% | "
+            + "Disco "
+            + str(sv["disk_percent"])
+            + "%"
+            + temp_str
+            + "\n"
+            + "  Docker "
+            + str(sv["docker_containers_running"])
+            + " contenedores"
+            + " | IP "
+            + str(sv["ip_address"])
+            + " | Uptime "
+            + _fmt_uptime(sv.get("uptime"))
         )
 
     return "\n\n".join(parts) if parts else "Sin datos de monitoreo disponibles."
 
 
+# ─── Network scan summary ────────────────────────────────────────────────────
+
+_TYPE_LABELS = {
+    "camera": "Cámara IP",
+    "tv": "Televisor",
+    "plug": "Enchufe inteligente",
+    "ir_controller": "Controlador IR",
+    "router": "Router/AP",
+    "computer": "Computadora",
+    "nas": "NAS / servidor",
+    "printer": "Impresora",
+    "unknown": "Desconocido",
+}
+
+_TYPE_ICONS = {
+    "camera": "📷",
+    "tv": "📺",
+    "plug": "🔌",
+    "ir_controller": "🔴",
+    "router": "📡",
+    "computer": "💻",
+    "nas": "🗄️",
+    "printer": "🖨️",
+    "unknown": "❓",
+}
+
+
+async def _scan_network_summary(subnet: str = "") -> str:
+    from .smart_devices.discovery import scan_network
+
+    log.info("Escaneo de red solicitado por voz — subred: %s", subnet or "auto")
+    try:
+        results = await asyncio.wait_for(
+            scan_network(subnet=subnet or ""),
+            timeout=45.0,
+        )
+    except asyncio.TimeoutError:
+        return "El escaneo tardó demasiado. Intenta de nuevo."
+    except Exception as e:
+        log.error("scan_network error: %s", e)
+        return "No pude escanear la red. Verifica la conexión."
+
+    if not results:
+        return "No encontré dispositivos en la red local."
+
+    lines = [f"Encontré {len(results)} dispositivo(s):"]
+    for r in sorted(results, key=lambda x: x.ip):
+        icon = _TYPE_ICONS.get(r.device_type, "❓")
+        label = _TYPE_LABELS.get(r.device_type, r.device_type)
+        name = r.hostname or r.manufacturer or "Sin nombre"
+        proto = ", ".join(r.protocols[:3]) if r.protocols else "—"
+        lines.append(f"  {icon} {r.ip} — {label} ({name}) [{proto}]")
+
+    return "\n".join(lines)
+
+
 # ─── Main process ─────────────────────────────────────────────────────────────
+
 
 async def process(text: str) -> str:
     global _history
@@ -287,7 +474,7 @@ async def process(text: str) -> str:
     _history.append({"role": "user", "content": text})
     _history.append({"role": "assistant", "content": raw})
     if len(_history) > _MAX_HIST * 2:
-        _history = _history[-_MAX_HIST * 2:]
+        _history = _history[-_MAX_HIST * 2 :]
 
     data = _first_json(raw)
     if not data:
@@ -305,10 +492,13 @@ async def process(text: str) -> str:
             await asyncio.sleep(params.get("ms", 1000) / 1000)
 
         elif action == "open_website":
-            url = await _run("open_website", {
-                "action": params.get("type", "search"),
-                "target": params.get("target", ""),
-            })
+            url = await _run(
+                "open_website",
+                {
+                    "action": params.get("type", "search"),
+                    "target": params.get("target", ""),
+                },
+            )
             if url and url.startswith("http"):
                 _pending_url = url
 
@@ -319,16 +509,22 @@ async def process(text: str) -> str:
             await _run("open_folder", {"path": params.get("path", "")})
 
         elif action == "key_press":
-            await _run("key_press", {"key": params.get("key", ""), "times": params.get("times", 1)})
+            await _run(
+                "key_press",
+                {"key": params.get("key", ""), "times": params.get("times", 1)},
+            )
 
         elif action == "type_text":
             await _run("type_text", {"text": params.get("text", "")})
 
         elif action == "system_control":
-            return await _run("system_control", {
-                "command": params.get("command", ""),
-                "value": params.get("value", ""),
-            })
+            return await _run(
+                "system_control",
+                {
+                    "command": params.get("command", ""),
+                    "value": params.get("value", ""),
+                },
+            )
 
         elif action == "get_datetime":
             return await _run("get_datetime", {})
@@ -340,13 +536,17 @@ async def process(text: str) -> str:
             return await _run("take_screenshot", {})
 
         elif action == "smart_home":
-            return await _run("smart_home", {
-                "device": params.get("device", ""),
-                "action": params.get("action", "on"),
-            })
+            return await _run(
+                "smart_home",
+                {
+                    "device": params.get("device", ""),
+                    "action": params.get("action", "on"),
+                },
+            )
 
         elif action == "ac_control":
             from .smarthome import ac_control
+
             return await asyncio.to_thread(
                 ac_control,
                 params.get("device", "aire acondicionado"),
@@ -358,14 +558,18 @@ async def process(text: str) -> str:
 
         elif action == "web_search":
             from .websearch import search
+
             return await search(params.get("query", text))
 
         elif action == "remember":
-            return await _run("remember", {
-                "key": params.get("key", "dato"),
-                "value": params.get("value", ""),
-                "category": params.get("category", "notes"),
-            })
+            return await _run(
+                "remember",
+                {
+                    "key": params.get("key", "dato"),
+                    "value": params.get("value", ""),
+                    "category": params.get("category", "notes"),
+                },
+            )
 
         elif action == "forget":
             return await _run("forget", {"key": params.get("key", "")})
@@ -374,14 +578,18 @@ async def process(text: str) -> str:
             return await _run("recall", {"key": params.get("key", "")})
 
         elif action == "reminder":
-            return await _run("reminder", {
-                "message": params.get("message", ""),
-                "time": params.get("time", ""),
-                "date": params.get("date", "today"),
-            })
+            return await _run(
+                "reminder",
+                {
+                    "message": params.get("message", ""),
+                    "time": params.get("time", ""),
+                    "date": params.get("date", "today"),
+                },
+            )
 
         elif action == "tv_control":
             from .tv import tv_control
+
             return await asyncio.to_thread(
                 tv_control,
                 params.get("command", "status"),
@@ -390,10 +598,12 @@ async def process(text: str) -> str:
 
         elif action == "screen_vision":
             from .vision import see_screen
+
             return await see_screen(params.get("question", "¿Qué hay en la pantalla?"))
 
         elif action == "google_home":
             from .google_home import google_home_control
+
             return await asyncio.to_thread(
                 google_home_control,
                 params.get("command", "status"),
@@ -402,6 +612,7 @@ async def process(text: str) -> str:
 
         elif action == "spotify_control":
             from .spotify_control import handle_spotify
+
             return await asyncio.to_thread(
                 handle_spotify,
                 params.get("action", "now_playing"),
@@ -411,6 +622,7 @@ async def process(text: str) -> str:
 
         elif action == "get_weather":
             from .weather import get_weather
+
             return await get_weather(params.get("location", ""))
 
         elif action == "server_status":
@@ -418,13 +630,19 @@ async def process(text: str) -> str:
 
         elif action == "movies_info":
             from .tmdb_client import search_content
+
             return await asyncio.to_thread(
                 search_content,
                 params.get("query", ""),
                 params.get("type", "movie"),
             )
 
+        elif action == "scan_network":
+            return await _scan_network_summary(params.get("subnet", ""))
+
     result = reply or "Listo."
     if _pending_url:
-        return json.dumps({"reply": result, "open_url": _pending_url}, ensure_ascii=False)
+        return json.dumps(
+            {"reply": result, "open_url": _pending_url}, ensure_ascii=False
+        )
     return result

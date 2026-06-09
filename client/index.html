@@ -47,6 +47,7 @@
       <button class="cptab"        data-tab="quick"   onclick="switchTab('quick')">⚡<br><small>RÁPIDOS</small></button>
       <button class="cptab"        data-tab="hist"    onclick="switchTab('hist')">📋<br><small>LOG</small></button>
       <button class="cptab"        data-tab="monitor" onclick="switchTab('monitor')">🖥<br><small>MONITOR</small></button>
+      <button class="cptab"        data-tab="smart"   onclick="switchTab('smart')">📡<br><small>SMART</small></button>
     </nav>
 
     <div class="cp-body">
@@ -126,6 +127,11 @@
           <button class="qbtn" onclick="sendQuick('abre spotify')">🎵 Spotify</button>
           <button class="qbtn" onclick="sendQuick('abre vscode')">💻 VSCode</button>
           <button class="qbtn" onclick="sendQuick('abre discord')">💬 Discord</button>
+        </div>
+        <p class="cp-section-label" style="margin-top:16px">RED LOCAL</p>
+        <div class="quick-grid">
+          <button class="qbtn" onclick="sendQuick('analiza la red')">🔍 Escanear red</button>
+          <button class="qbtn" onclick="sendQuick('qué dispositivos hay en la red')">📡 Ver dispositivos</button>
         </div>
         <p class="cp-section-label" style="margin-top:16px">SMART HOME</p>
         <div class="quick-grid">
@@ -210,6 +216,104 @@
           <p class="cp-loading">Sin actividad aún</p>
         </div>
       </div>
+
+      <!-- Dispositivos Inteligentes -->
+      <div id="cptab-smart" class="cptab-pane">
+
+        <!-- Sub-tabs -->
+        <div class="smart-tabs">
+          <button class="stab active" data-stab="cameras"   onclick="switchSmartTab('cameras')">📷 Cámaras</button>
+          <button class="stab"        data-stab="tvs"        onclick="switchSmartTab('tvs')">📺 TVs</button>
+          <button class="stab"        data-stab="plugs"      onclick="switchSmartTab('plugs')">🔌 Enchufes</button>
+          <button class="stab"        data-stab="ir"         onclick="switchSmartTab('ir')">🔴 IR</button>
+          <button class="stab"        data-stab="discovery"  onclick="switchSmartTab('discovery')">🔍 Escaneo</button>
+          <button class="stab"        data-stab="config"     onclick="switchSmartTab('config')">⚙ Config</button>
+        </div>
+
+        <!-- Cámaras -->
+        <div id="stab-cameras" class="stab-pane active">
+          <div class="smart-toolbar">
+            <button class="smart-btn" onclick="smartDiscoverOnvif()">◉ Buscar ONVIF</button>
+            <button class="smart-btn" onclick="smartAddDevice('camera')">＋ Agregar</button>
+          </div>
+          <div id="smart-cameras-list" class="smart-device-list">
+            <p class="cp-loading">◌ Sin cámaras registradas</p>
+          </div>
+        </div>
+
+        <!-- TVs -->
+        <div id="stab-tvs" class="stab-pane">
+          <div class="smart-toolbar">
+            <button class="smart-btn" onclick="smartAddDevice('tv')">＋ Agregar TV</button>
+          </div>
+          <div id="smart-tvs-list" class="smart-device-list">
+            <p class="cp-loading">◌ Sin TVs registrados</p>
+          </div>
+        </div>
+
+        <!-- Enchufes -->
+        <div id="stab-plugs" class="stab-pane">
+          <div class="smart-toolbar">
+            <button class="smart-btn" onclick="smartAddDevice('plug')">＋ Agregar enchufe</button>
+          </div>
+          <div id="smart-plugs-list" class="smart-device-list">
+            <p class="cp-loading">◌ Sin enchufes registrados</p>
+          </div>
+        </div>
+
+        <!-- IR -->
+        <div id="stab-ir" class="stab-pane">
+          <div class="smart-toolbar">
+            <button class="smart-btn" onclick="smartAddDevice('ir_controller')">＋ Agregar IR</button>
+          </div>
+          <div id="smart-ir-list" class="smart-device-list">
+            <p class="cp-loading">◌ Sin controladores IR</p>
+          </div>
+          <p class="cp-section-label" style="margin-top:12px">CÓDIGOS IR GUARDADOS</p>
+          <div id="smart-ir-codes" class="smart-device-list"></div>
+        </div>
+
+        <!-- Descubrimiento -->
+        <div id="stab-discovery" class="stab-pane">
+          <p class="cp-section-label">ESCANEO DE RED LOCAL</p>
+          <div class="smart-toolbar">
+            <input id="smart-subnet" class="smart-input" placeholder="192.168.1.0/24" value="">
+            <button class="smart-btn smart-btn-primary" onclick="smartStartScan()">▶ Escanear</button>
+          </div>
+          <div id="smart-scan-progress" class="smart-progress" style="display:none">
+            <div class="smart-progress-bar"><div id="smart-progress-fill" class="smart-progress-fill"></div></div>
+            <span id="smart-progress-label" class="smart-progress-label">0 / 0</span>
+          </div>
+          <div id="smart-scan-results" class="smart-device-list">
+            <p class="cp-loading">◌ Inicia el escaneo para descubrir dispositivos</p>
+          </div>
+        </div>
+
+        <!-- Configuración -->
+        <div id="stab-config" class="stab-pane">
+          <p class="cp-section-label">DISPOSITIVOS REGISTRADOS</p>
+          <div id="smart-all-list" class="smart-device-list">
+            <p class="cp-loading">◌ Cargando...</p>
+          </div>
+          <p class="cp-section-label" style="margin-top:12px">AGREGAR DISPOSITIVO MANUAL</p>
+          <div class="smart-form">
+            <input id="sf-ip"   class="smart-input" placeholder="IP (ej: 192.168.1.100)">
+            <input id="sf-name" class="smart-input" placeholder="Nombre">
+            <select id="sf-type" class="smart-input">
+              <option value="unknown">Tipo: Desconocido</option>
+              <option value="camera">Cámara IP</option>
+              <option value="tv">Televisor</option>
+              <option value="plug">Enchufe inteligente</option>
+              <option value="ir_controller">Controlador IR</option>
+              <option value="computer">Computadora</option>
+              <option value="router">Router</option>
+            </select>
+            <button class="smart-btn smart-btn-primary" onclick="smartSaveManual()">Guardar dispositivo</button>
+            <button class="smart-btn" onclick="smartAutodetect()">⚡ Auto-detectar protocolo</button>
+          </div>
+        </div>
+
+      </div><!-- /cptab-smart -->
 
     </div>
   </aside>

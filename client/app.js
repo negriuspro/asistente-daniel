@@ -819,6 +819,7 @@ function loadTab(tab) {
   if (tab === 'system')  loadSystem();
   if (tab === 'hist')    renderHistory();
   if (tab === 'monitor') loadMonitor();
+  if (tab === 'smart')   smartInit();
 }
 
 const DEV_ICONS = { bombillo: '💡', aire: '❄️', control: '🎛️', enchufe: '🔌' };
@@ -987,4 +988,373 @@ function renderHistory() {
 function clearHistory() {
   cmdHistory.length = 0;
   renderHistory();
+}
+
+/* ─── Dispositivos Inteligentes ──────────────────────────────────────── */
+
+let _smartTab = 'cameras';
+let _scanPollInterval = null;
+
+function smartInit() {
+  switchSmartTab(_smartTab);
+}
+
+function switchSmartTab(tab) {
+  _smartTab = tab;
+  document.querySelectorAll('.stab').forEach(b => b.classList.toggle('active', b.dataset.stab === tab));
+  document.querySelectorAll('.stab-pane').forEach(p => p.classList.toggle('active', p.id === `stab-${tab}`));
+  if (tab === 'cameras')   smartLoadCameras();
+  if (tab === 'tvs')       smartLoadTvs();
+  if (tab === 'plugs')     smartLoadPlugs();
+  if (tab === 'ir')        smartLoadIr();
+  if (tab === 'discovery') smartLoadScanStatus();
+  if (tab === 'config')    smartLoadAll();
+}
+
+/* ── Helpers ── */
+const _typeIcons = { camera:'📷', tv:'📺', plug:'🔌', ir_controller:'🔴',
+                     computer:'💻', phone:'📱', router:'🌐', unknown:'❓' };
+
+function _smartFetch(url, opts = {}) {
+  return fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
+}
+
+function _renderDeviceCard(d, actions = []) {
+  const icon = _typeIcons[d.device_type] || '❓';
+  const proto = (d.protocols || []).join(', ') || '—';
+  const method = d.control_method || '—';
+  const actBtns = actions.map(a =>
+    `<button class="smart-card-btn" onclick="${a.fn}">${a.label}</button>`
+  ).join('');
+  return `
+    <div class="smart-card" data-id="${d.id}">
+      <div class="smart-card-header">
+        <span class="smart-card-icon">${icon}</span>
+        <span class="smart-card-name">${d.name || d.ip}</span>
+        <span class="smart-card-ip">${d.ip}</span>
+      </div>
+      <div class="smart-card-meta">
+        <span>${d.manufacturer || ''}${d.model ? ' · ' + d.model : ''}</span>
+        <span class="smart-badge">${method}</span>
+      </div>
+      <div class="smart-card-proto">${proto}</div>
+      <div class="smart-card-actions">
+        ${actBtns}
+        <button class="smart-card-btn smart-card-btn-del" onclick="smartDeleteDevice('${d.id}')">✕</button>
+      </div>
+    </div>`;
+}
+
+/* ── Cámaras ── */
+async function smartLoadCameras() {
+  const el = $('smart-cameras-list');
+  el.innerHTML = '<p class="cp-loading">◌ Cargando...</p>';
+  try {
+    const r = await _smartFetch('/api/smart/cameras');
+    const { cameras } = await r.json();
+    if (!cameras.length) { el.innerHTML = '<p class="cp-loading">◌ Sin cámaras registradas</p>'; return; }
+    el.innerHTML = cameras.map(c => _renderDeviceCard(c, [
+      { label: '⚙ Probar', fn: `smartProbeCamera('${c.id}')` },
+      { label: '▶ RTSP',   fn: `smartOpenRtsp('${c.id}')` },
+    ])).join('');
+  } catch { el.innerHTML = '<p class="cp-loading">Error cargando cámaras</p>'; }
+}
+
+async function smartDiscoverOnvif() {
+  addLog('Buscando cámaras ONVIF...', 'info');
+  try {
+    const r = await _smartFetch('/api/smart/cameras/discover/onvif', { method: 'POST' });
+    const { found } = await r.json();
+    if (!found.length) { addLog('No se encontraron cámaras ONVIF', 'warn'); return; }
+    for (const cam of found) {
+      await _smartFetch('/api/smart/devices', {
+        method: 'POST',
+        body: JSON.stringify({ ip: cam.ip, device_type: 'camera', name: 'Cámara ONVIF', protocols: ['onvif'] }),
+      });
+    }
+    addLog(`${found.length} cámara(s) ONVIF encontrada(s)`, 'ok');
+    smartLoadCameras();
+  } catch { addLog('Error en descubrimiento ONVIF', 'err'); }
+}
+
+async function smartProbeCamera(id) {
+  addLog('Probando cámara...', 'info');
+  try {
+    const r = await _smartFetch(`/api/smart/cameras/${id}/probe`, { method: 'POST' });
+    const data = await r.json();
+    const caps = data.capabilities || {};
+    addLog(`Cámara: ONVIF=${caps.onvif} RTSP=${caps.rtsp}`, caps.rtsp ? 'ok' : 'warn');
+    smartLoadCameras();
+  } catch { addLog('Error probando cámara', 'err'); }
+}
+
+function smartOpenRtsp(id) {
+  const card = document.querySelector(`.smart-card[data-id="${id}"]`);
+  addLog(`Para ver el stream RTSP usa VLC o ffplay con la URL guardada`, 'info');
+}
+
+/* ── TVs ── */
+async function smartLoadTvs() {
+  const el = $('smart-tvs-list');
+  el.innerHTML = '<p class="cp-loading">◌ Cargando...</p>';
+  try {
+    const r = await _smartFetch('/api/smart/tvs');
+    const { tvs } = await r.json();
+    if (!tvs.length) { el.innerHTML = '<p class="cp-loading">◌ Sin TVs registrados</p>'; return; }
+    el.innerHTML = tvs.map(tv => _renderDeviceCard(tv, [
+      { label: '⚙ Detectar', fn: `smartDetectTv('${tv.id}')` },
+      { label: '⏻ ON/OFF',   fn: `smartControlTv('${tv.id}','power_off')` },
+      { label: '🔊+',        fn: `smartControlTv('${tv.id}','volume_up')` },
+      { label: '🔊-',        fn: `smartControlTv('${tv.id}','volume_down')` },
+    ])).join('');
+  } catch { el.innerHTML = '<p class="cp-loading">Error cargando TVs</p>'; }
+}
+
+async function smartDetectTv(id) {
+  addLog('Detectando TV...', 'info');
+  try {
+    const r = await _smartFetch(`/api/smart/tvs/${id}/detect`, { method: 'POST' });
+    const data = await r.json();
+    addLog(data.ok ? `TV detectado: ${data.info?.control_method}` : 'TV no responde', data.ok ? 'ok' : 'warn');
+    smartLoadTvs();
+  } catch { addLog('Error detectando TV', 'err'); }
+}
+
+async function smartControlTv(id, command, value = '') {
+  try {
+    const r = await _smartFetch(`/api/smart/tvs/${id}/control`, {
+      method: 'POST',
+      body: JSON.stringify({ command, value }),
+    });
+    const data = await r.json();
+    addLog(`TV ${command}: ${data.ok ? 'OK' : data.error || 'error'}`, data.ok ? 'ok' : 'err');
+  } catch { addLog('Error controlando TV', 'err'); }
+}
+
+/* ── Enchufes ── */
+async function smartLoadPlugs() {
+  const el = $('smart-plugs-list');
+  el.innerHTML = '<p class="cp-loading">◌ Cargando...</p>';
+  try {
+    const r = await _smartFetch('/api/smart/plugs');
+    const { plugs } = await r.json();
+    if (!plugs.length) { el.innerHTML = '<p class="cp-loading">◌ Sin enchufes registrados</p>'; return; }
+    el.innerHTML = plugs.map(p => _renderDeviceCard(p, [
+      { label: '⚙ Detectar', fn: `smartDetectPlug('${p.id}')` },
+      { label: '● ON',       fn: `smartControlPlug('${p.id}','on')` },
+      { label: '○ OFF',      fn: `smartControlPlug('${p.id}','off')` },
+      { label: '↻ Estado',   fn: `smartControlPlug('${p.id}','status')` },
+    ])).join('');
+  } catch { el.innerHTML = '<p class="cp-loading">Error cargando enchufes</p>'; }
+}
+
+async function smartDetectPlug(id) {
+  addLog('Detectando enchufe...', 'info');
+  try {
+    const r = await _smartFetch(`/api/smart/plugs/${id}/detect`, { method: 'POST' });
+    const data = await r.json();
+    addLog(data.ok ? `Protocolo: ${data.info?.control_method}` : 'Enchufe no responde', data.ok ? 'ok' : 'warn');
+    smartLoadPlugs();
+  } catch { addLog('Error detectando enchufe', 'err'); }
+}
+
+async function smartControlPlug(id, action) {
+  try {
+    const r = await _smartFetch(`/api/smart/plugs/${id}/control`, {
+      method: 'POST',
+      body: JSON.stringify({ command: action }),
+    });
+    const data = await r.json();
+    addLog(`Enchufe ${action}: ${data.ok ? (data.state || 'OK') : data.error || 'error'}`, data.ok ? 'ok' : 'err');
+    smartLoadPlugs();
+  } catch { addLog('Error controlando enchufe', 'err'); }
+}
+
+/* ── IR ── */
+async function smartLoadIr() {
+  const el = $('smart-ir-list');
+  el.innerHTML = '<p class="cp-loading">◌ Cargando...</p>';
+  try {
+    const r = await _smartFetch('/api/smart/ir');
+    const { controllers } = await r.json();
+    if (!controllers.length) { el.innerHTML = '<p class="cp-loading">◌ Sin controladores IR</p>'; }
+    else el.innerHTML = controllers.map(c => _renderDeviceCard(c, [
+      { label: '⚙ Detectar', fn: `smartDetectIr('${c.id}')` },
+    ])).join('');
+    smartLoadIrCodes();
+  } catch { el.innerHTML = '<p class="cp-loading">Error cargando IR</p>'; }
+}
+
+async function smartDetectIr(id) {
+  addLog('Detectando controlador IR...', 'info');
+  try {
+    const r = await _smartFetch(`/api/smart/ir/${id}/detect`, { method: 'POST' });
+    const data = await r.json();
+    addLog(data.ok ? `IR detectado: ${data.info?.control_method}` : 'No responde', data.ok ? 'ok' : 'warn');
+    smartLoadIr();
+  } catch { addLog('Error detectando IR', 'err'); }
+}
+
+async function smartLoadIrCodes() {
+  const el = $('smart-ir-codes');
+  try {
+    const r = await _smartFetch('/api/smart/ir/codes');
+    const { codes } = await r.json();
+    const devices = Object.keys(codes);
+    if (!devices.length) { el.innerHTML = '<p class="cp-loading">◌ Sin códigos guardados</p>'; return; }
+    el.innerHTML = devices.map(dev => {
+      const actions = Object.keys(codes[dev]);
+      return `<div class="smart-ir-group">
+        <div class="smart-ir-dev">${dev}</div>
+        <div class="smart-ir-actions">${actions.map(a =>
+          `<span class="smart-ir-code" title="${codes[dev][a].protocol}">${a}</span>`
+        ).join('')}</div>
+      </div>`;
+    }).join('');
+  } catch { el.innerHTML = ''; }
+}
+
+/* ── Escaneo ── */
+async function smartStartScan() {
+  const subnet = $('smart-subnet').value.trim();
+  const btn = document.querySelector('#stab-discovery .smart-btn-primary');
+  btn.disabled = true;
+  btn.textContent = '⏳ Escaneando...';
+
+  $('smart-scan-progress').style.display = 'block';
+  $('smart-scan-results').innerHTML = '<p class="cp-loading">◌ Escaneando red...</p>';
+
+  try {
+    await _smartFetch('/api/smart/scan/start', {
+      method: 'POST',
+      body: JSON.stringify({ subnet }),
+    });
+    _scanPollInterval = setInterval(smartPollScan, 1500);
+  } catch {
+    addLog('Error iniciando escaneo', 'err');
+    btn.disabled = false;
+    btn.textContent = '▶ Escanear';
+  }
+}
+
+async function smartLoadScanStatus() {
+  try {
+    const r = await _smartFetch('/api/smart/scan/status');
+    const data = await r.json();
+    if (data.running) {
+      $('smart-scan-progress').style.display = 'block';
+      const pct = data.total ? Math.round(data.progress / data.total * 100) : 0;
+      $('smart-progress-fill').style.width = pct + '%';
+      $('smart-progress-label').textContent = `${data.progress} / ${data.total}`;
+    }
+    if (data.results && data.results.length) _renderScanResults(data.results);
+  } catch {}
+}
+
+async function smartPollScan() {
+  try {
+    const r = await _smartFetch('/api/smart/scan/status');
+    const data = await r.json();
+    const pct = data.total ? Math.round(data.progress / data.total * 100) : 0;
+    $('smart-progress-fill').style.width = pct + '%';
+    $('smart-progress-label').textContent = `${data.progress} / ${data.total}`;
+
+    if (data.results) _renderScanResults(data.results);
+
+    if (!data.running) {
+      clearInterval(_scanPollInterval);
+      const btn = document.querySelector('#stab-discovery .smart-btn-primary');
+      if (btn) { btn.disabled = false; btn.textContent = '▶ Escanear'; }
+      addLog(`Escaneo completo: ${data.results.length} dispositivos`, 'ok');
+    }
+  } catch { clearInterval(_scanPollInterval); }
+}
+
+function _renderScanResults(results) {
+  const el = $('smart-scan-results');
+  if (!results.length) { el.innerHTML = '<p class="cp-loading">◌ No se encontraron dispositivos</p>'; return; }
+  el.innerHTML = results.map(r => `
+    <div class="smart-scan-row">
+      <span class="smart-card-icon">${_typeIcons[r.device_type] || '❓'}</span>
+      <div class="smart-scan-info">
+        <span class="smart-scan-ip">${r.ip}</span>
+        <span class="smart-scan-name">${r.hostname || r.manufacturer || r.device_type}</span>
+        <span class="smart-scan-proto">${(r.protocols || []).join(', ') || '—'}</span>
+      </div>
+      <button class="smart-card-btn" onclick="smartSaveFromScan(${JSON.stringify(r).replace(/"/g, '&quot;')})">＋</button>
+    </div>`).join('');
+}
+
+async function smartSaveFromScan(result) {
+  try {
+    await _smartFetch('/api/smart/devices', {
+      method: 'POST',
+      body: JSON.stringify({
+        ip: result.ip, mac: result.mac, hostname: result.hostname,
+        manufacturer: result.manufacturer, device_type: result.device_type,
+        open_ports: result.open_ports, protocols: result.protocols,
+      }),
+    });
+    addLog(`${result.ip} guardado como ${result.device_type}`, 'ok');
+    smartLoadAll();
+  } catch { addLog('Error guardando dispositivo', 'err'); }
+}
+
+/* ── Config / Todos ── */
+async function smartLoadAll() {
+  const el = $('smart-all-list');
+  el.innerHTML = '<p class="cp-loading">◌ Cargando...</p>';
+  try {
+    const r = await _smartFetch('/api/smart/devices');
+    const { devices } = await r.json();
+    if (!devices.length) { el.innerHTML = '<p class="cp-loading">◌ Sin dispositivos registrados</p>'; return; }
+    el.innerHTML = devices.map(d => _renderDeviceCard(d)).join('');
+  } catch { el.innerHTML = '<p class="cp-loading">Error cargando dispositivos</p>'; }
+}
+
+async function smartDeleteDevice(id) {
+  if (!confirm('¿Eliminar dispositivo?')) return;
+  try {
+    await _smartFetch(`/api/smart/devices/${id}`, { method: 'DELETE' });
+    addLog(`Dispositivo eliminado`, 'ok');
+    smartInit();
+  } catch { addLog('Error eliminando dispositivo', 'err'); }
+}
+
+function smartAddDevice(type) {
+  switchSmartTab('config');
+  const sel = $('sf-type');
+  if (sel) sel.value = type;
+  $('sf-ip') && $('sf-ip').focus();
+}
+
+async function smartSaveManual() {
+  const ip   = $('sf-ip')?.value.trim();
+  const name = $('sf-name')?.value.trim();
+  const type = $('sf-type')?.value;
+  if (!ip) { addLog('Ingresa una IP', 'warn'); return; }
+  try {
+    await _smartFetch('/api/smart/devices', {
+      method: 'POST',
+      body: JSON.stringify({ ip, name, device_type: type }),
+    });
+    addLog(`Dispositivo ${ip} guardado`, 'ok');
+    $('sf-ip').value = ''; $('sf-name').value = '';
+    smartLoadAll();
+  } catch { addLog('Error guardando dispositivo', 'err'); }
+}
+
+async function smartAutodetect() {
+  const ip = $('sf-ip')?.value.trim();
+  if (!ip) { addLog('Ingresa una IP para auto-detectar', 'warn'); return; }
+  addLog(`Auto-detectando ${ip}...`, 'info');
+  try {
+    const r = await _smartFetch('/api/smart/autodetect', {
+      method: 'POST',
+      body: JSON.stringify({ ip }),
+    });
+    const data = await r.json();
+    $('sf-type').value = data.type;
+    addLog(`Detectado como: ${data.type}`, 'ok');
+  } catch { addLog('Error en auto-detección', 'err'); }
 }
