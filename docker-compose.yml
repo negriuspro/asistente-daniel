@@ -97,6 +97,7 @@ services:
       DOCKER_LOG_LINES: ${DOCKER_LOG_LINES:-200}
       DOCKER_STOP_TIMEOUT: ${DOCKER_STOP_TIMEOUT:-10}
       DANIEL_ADMIN_TOKEN: ${DANIEL_ADMIN_TOKEN}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5004,http://192.168.100.6:3005}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
     expose:
       - "8000"

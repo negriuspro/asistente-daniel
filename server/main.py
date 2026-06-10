@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -15,6 +16,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -40,6 +42,18 @@ log = logging.getLogger("daniel")
 CLIENT_DIR = Path(__file__).parent.parent / "client"
 
 app = FastAPI(title="Daniel AI Assistant")
+
+# CORS — necesario para que AngelOS (otro origen) consuma /api/* desde el navegador
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.environ.get(
+        "CORS_ORIGINS", "http://localhost:5004,http://192.168.100.6:3005"
+    ).split(","),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(docker_router)
 app.include_router(system_monitor_router)
 app.include_router(smart_devices_router)
