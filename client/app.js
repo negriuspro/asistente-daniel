@@ -831,7 +831,7 @@ function devIcon(name) {
 
 async function loadDevices() {
   const list = document.getElementById('devices-list');
-  list.innerHTML = '<p class="cp-loading">◌ Conectando con Tuya...</p>';
+  list.innerHTML = '<p class="cp-loading">◌ Conectando con Home Assistant...</p>';
   try {
     const res  = await fetch('/api/devices');
     const data = await res.json();
