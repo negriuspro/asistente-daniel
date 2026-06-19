@@ -217,3 +217,7 @@ async def system_status():
 # ── Carga inicial ────────────────────────────────────────────────────────────
 
 _load_persisted()
+
+# Alias público — reutilizado por docker_api.py (Fase 1, Daniel Core) para no
+# duplicar la recolección de métricas de host (psutil) en el nuevo router Docker.
+get_server_metrics = _server_metrics

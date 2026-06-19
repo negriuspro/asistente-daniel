@@ -26,6 +26,7 @@ from .ai_agent import clear_history, process
 from .battery_monitor import monitor as _bm_monitor
 from .conversation_log import get_history, log_conversation
 from .docker_control import router as docker_router
+from .docker_control import ws_router as docker_ws_router
 from .system_monitor import router as system_monitor_router
 from .smart_devices.router import router as smart_devices_router
 from .smarthome import control_device, get_device_status, list_devices
@@ -55,6 +56,7 @@ app.add_middleware(
 )
 
 app.include_router(docker_router)
+app.include_router(docker_ws_router)
 app.include_router(system_monitor_router)
 app.include_router(smart_devices_router)
 
