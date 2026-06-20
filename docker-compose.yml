@@ -87,6 +87,7 @@ services:
     build:
       context: .
       dockerfile: server/Dockerfile
+      network: host
     image: daniel-backend:latest
     env_file:
       - .env
@@ -158,6 +159,7 @@ services:
     build:
       context: ./docker/backup
       dockerfile: Dockerfile
+      network: host
     restart: unless-stopped
     mem_limit: 32m
     cpus: "0.05"
